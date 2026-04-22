@@ -1,0 +1,368 @@
+:root {
+  --bg: #0c0a09;
+  --panel: #100e0c;
+  --gray: #c0b8b0;
+  --gray-dim: #6a6460;
+  --border: #4a4540;
+  --red: #8b1a1a;
+  --red-hi: #b02020;
+  --red-dim: #5a1010;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.app-root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg);
+}
+
+.ui-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Panel base */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  pointer-events: all;
+}
+
+.panel-title {
+  font-family: 'Cinzel Decorative', serif;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--red-hi);
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--red-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Adventurers panel */
+.adventurers-panel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 220px;
+}
+
+.user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-left: 1px solid transparent;
+}
+
+.user-row.is-current {
+  border-left-color: var(--red-dim);
+  background: rgba(90, 16, 16, 0.12);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: #1a1816;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Cinzel', serif;
+  font-size: 13px;
+  color: var(--gray);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.user-row.is-current .avatar {
+  border-color: var(--red);
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.username {
+  font-family: 'IM Fell English', serif;
+  font-style: italic;
+  font-size: 14px;
+  color: var(--gray);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.you-badge {
+  font-family: 'Cinzel', serif;
+  font-size: 8px;
+  font-weight: 700;
+  background: var(--red);
+  color: var(--gray);
+  padding: 2px 5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* Chronicle of Rolls */
+.chronicle-panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 270px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) var(--panel);
+}
+
+.chronicle-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chronicle-panel::-webkit-scrollbar-thumb {
+  background: var(--border);
+}
+
+.roll-entry {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.roll-entry:last-child {
+  border-bottom: none;
+}
+
+.roll-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.roll-username {
+  font-family: 'Cinzel', serif;
+  font-size: 15px;
+  color: var(--gray);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dice-tag {
+  font-family: 'Cinzel', serif;
+  font-size: 13px;
+  color: var(--red-hi);
+  border: 1px solid var(--red-dim);
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
+.roll-timestamp {
+  font-family: 'IM Fell English', serif;
+  font-size: 13px;
+  color: var(--gray-dim);
+  flex-shrink: 0;
+}
+
+.roll-entry-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.die-pip {
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+  color: var(--gray);
+  background: #1a1816;
+  border: 1px solid var(--border);
+  padding: 2px 7px;
+  min-width: 24px;
+  text-align: center;
+}
+
+.roll-separator {
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+  color: var(--gray-dim);
+}
+
+.roll-total {
+  font-family: 'Cinzel', serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--gray);
+}
+
+/* Dice picker */
+.dice-picker {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  pointer-events: all;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fab {
+  width: 60px;
+  height: 60px;
+  background: var(--red);
+  border: 1px solid var(--red-hi);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  cursor: pointer;
+  color: var(--gray);
+  padding: 0;
+}
+
+.fab:hover {
+  background: var(--red-hi);
+}
+
+.die-grid {
+  display: flex;
+  gap: 6px;
+}
+
+.die-button {
+  width: 52px;
+  height: 52px;
+  background: #1a1816;
+  border: 1px solid var(--border);
+  font-family: 'Cinzel', serif;
+  font-size: 13px;
+  color: var(--gray-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.die-button:hover {
+  border-color: var(--gray-dim);
+  color: var(--gray);
+}
+
+.die-button.selected {
+  background: rgba(139, 26, 26, 0.15);
+  border-color: var(--red-hi);
+  color: var(--red-hi);
+}
+
+.count-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.count-label {
+  font-family: 'Cinzel', serif;
+  font-size: 12px;
+  color: var(--gray-dim);
+}
+
+.count-input {
+  width: 44px;
+  background: #1a1816;
+  border: 1px solid var(--border);
+  color: var(--gray);
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+  text-align: center;
+  padding: 4px 6px;
+}
+
+.count-input:focus {
+  outline: none;
+  border-color: var(--gray-dim);
+}
+
+.count-notation {
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+  color: var(--gray);
+  min-width: 48px;
+}
+
+.roll-button {
+  font-family: 'Cinzel', serif;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--red);
+  border: 1px solid var(--red-hi);
+  color: var(--gray);
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.roll-button:hover {
+  background: var(--red-hi);
+}
+
+.reveal-button {
+  width: 60px;
+  height: 60px;
+  background: var(--red);
+  border: 1px solid var(--red-hi);
+  font-family: 'Cinzel', serif;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gray);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6px;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.reveal-button:hover {
+  background: var(--red-hi);
+}
+
+.auth-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+  color: var(--gray-dim);
+}
