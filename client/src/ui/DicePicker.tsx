@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { useStore } from '../state/store';
 import { getSocket } from '../socket/client';
 
@@ -10,32 +10,17 @@ interface Props {
 
 export function DicePicker({ instanceId }: Props) {
   const { state } = useStore();
-  const [expanded, setExpanded] = useState(false);
   const [selectedDie, setSelectedDie] = useState<number | null>(null);
   const [count, setCount] = useState(1);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   const currentUserId = state.currentUser?.userId;
   const myPendingRoll = currentUserId
     ? Object.values(state.pendingRolls).find(p => p.userId === currentUserId)
     : null;
 
-  useEffect(() => {
-    if (!expanded) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setExpanded(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [expanded]);
-
   function handleRoll() {
     if (!selectedDie) return;
-    const dice = `${count}d${selectedDie}`;
-    getSocket().emit('roll_start', { instanceId, dice, isHidden: false });
-    setExpanded(false);
+    getSocket().emit('roll_start', { instanceId, dice: `${count}d${selectedDie}`, isHidden: false });
     setSelectedDie(null);
     setCount(1);
   }
@@ -45,51 +30,53 @@ export function DicePicker({ instanceId }: Props) {
     getSocket().emit('roll_reveal', { instanceId, rollId: myPendingRoll.rollId });
   }
 
-  if (myPendingRoll) {
-    return (
-      <div className="dice-picker" ref={containerRef}>
-        <button className="reveal-button" onClick={handleReveal}>
-          Reveal {myPendingRoll.dice}
-        </button>
-      </div>
-    );
+  function adjustCount(delta: number) {
+    setCount(c => Math.max(1, Math.min(20, c + delta)));
   }
 
   return (
-    <div className="dice-picker" ref={containerRef}>
-      {expanded && (
-        <>
-          {selectedDie && (
-            <div className="count-row">
-              <span className="count-label">Cast</span>
+    <div className="dice-tray">
+      {myPendingRoll && (
+        <div className="reveal-banner">
+          <span className="reveal-banner-text">A roll awaits your command…</span>
+          <span className="reveal-banner-dice">{myPendingRoll.dice}</span>
+          <button className="reveal-btn" onClick={handleReveal}>Reveal</button>
+        </div>
+      )}
+
+      <div className="tray-row">
+        <div className="die-rack">
+          {DIE_TYPES.map(sides => (
+            <button
+              key={sides}
+              data-sides={sides}
+              className={`die-btn${selectedDie === sides ? ' selected' : ''}${myPendingRoll ? ' disabled' : ''}`}
+              onClick={() => !myPendingRoll && setSelectedDie(prev => prev === sides ? null : sides)}
+            >
+              <span className="die-face">d{sides}</span>
+            </button>
+          ))}
+        </div>
+
+        {selectedDie !== null && !myPendingRoll && (
+          <div className="roll-controls">
+            <div className="count-stepper">
+              <button className="count-btn" onClick={() => adjustCount(-1)}>−</button>
               <input
-                className="count-input"
+                className="count-value"
                 type="number"
                 min={1}
                 max={20}
                 value={count}
                 onChange={e => setCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
               />
-              <span className="count-notation">× d{selectedDie}</span>
-              <button className="roll-button" onClick={handleRoll}>
-                Roll the Bones
-              </button>
+              <button className="count-btn" onClick={() => adjustCount(1)}>+</button>
             </div>
-          )}
-          <div className="die-grid">
-            {DIE_TYPES.map(sides => (
-              <button
-                key={sides}
-                className={`die-button${selectedDie === sides ? ' selected' : ''}`}
-                onClick={() => setSelectedDie(sides)}
-              >
-                d{sides}
-              </button>
-            ))}
+            <span className="count-label">× d{selectedDie}</span>
+            <button className="cast-btn" onClick={handleRoll}>Cast the Bones</button>
           </div>
-        </>
-      )}
-      <button className="fab" onClick={() => setExpanded(v => !v)}>⚄</button>
+        )}
+      </div>
     </div>
   );
 }

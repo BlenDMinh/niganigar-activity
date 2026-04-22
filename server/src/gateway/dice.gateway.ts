@@ -70,7 +70,7 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join')
-  handleJoin(
+  async handleJoin(
     @MessageBody()
     payload: {
       instanceId: string;
@@ -89,7 +89,11 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
     const user: User = { ...payload.user, socketId: socket.id };
     session.users.set(user.userId, user);
-    void socket.join(payload.instanceId);
+
+    // Must await so the socket is in the room before the broadcast below.
+    // Without this, server.to(room).emit fires before the socket adapter
+    // registers membership, causing user_joined to reach nobody.
+    await socket.join(payload.instanceId);
 
     this.logger.log(
       `Session ${payload.instanceId} now has ${session.users.size} user(s)`,
@@ -97,6 +101,8 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     socket.emit('session_users', { users: Array.from(session.users.values()) });
     socket.emit('roll_history', { entries: session.rollHistory });
+    // Broadcast to the full room — the joining socket is now included,
+    // so they see themselves too (the store deduplicates by userId).
     this.server.to(payload.instanceId).emit('user_joined', { user });
   }
 

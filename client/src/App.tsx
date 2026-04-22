@@ -15,9 +15,6 @@ function ActivityApp() {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
-    // Cancellation flag: if React's StrictMode cleanup fires between awaits,
-    // the in-flight async run will see cancelled=true and bail out silently,
-    // letting the second (real) run take ownership.
     let cancelled = false;
 
     async function run() {
@@ -44,7 +41,6 @@ function ActivityApp() {
         const { access_token } = (await res.json()) as { access_token: string };
         const auth = await discordSdk.commands.authenticate({ access_token });
         if (cancelled) return;
-
         if (!auth) throw new Error('authenticate() returned null');
 
         const iid = discordSdk.instanceId;
@@ -62,7 +58,6 @@ function ActivityApp() {
             channelId: cid,
           },
         });
-
         setInstanceId(iid);
 
         const socket = getSocket();
@@ -93,33 +88,44 @@ function ActivityApp() {
         console.log('[ActivityApp] Auth complete, joined session', iid);
         setStatus('ready');
       } catch (e) {
-        if (cancelled) return; // stale run — ignore
+        if (cancelled) return;
         console.error('[ActivityApp] Setup failed:', e);
         setStatus('error');
       }
     }
 
     void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [dispatch]); // dispatch is stable (useReducer guarantee) — will never re-run
+    return () => { cancelled = true; };
+  }, [dispatch]);
 
   if (status === 'loading') {
-    return <div className="auth-loading">Connecting…</div>;
+    return (
+      <div className="auth-screen">
+        <div className="auth-sigil">⚄</div>
+        <p className="auth-word">Entering the realm…</p>
+      </div>
+    );
   }
 
   if (status === 'error') {
     return (
-      <div className="auth-loading">
-        Authentication failed — check the console and reload to retry.
+      <div className="auth-screen">
+        <div className="auth-sigil">✦</div>
+        <p className="auth-err">
+          The arcane connection failed.<br />Reload to try again.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="app-root">
-      <div className="ui-overlay">
+      <video className="bg-video" autoPlay loop muted playsInline>
+        <source src="/background.webm" type="video/webm" />
+        <source src="/background.mp4" type="video/mp4" />
+      </video>
+      <div className="bg-overlay" />
+      <div className="stage">
         <UserList />
         <RollHistory />
         {instanceId && <DicePicker instanceId={instanceId} />}
