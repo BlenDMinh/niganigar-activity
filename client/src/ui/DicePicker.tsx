@@ -25,58 +25,52 @@ export function DicePicker({ instanceId }: Props) {
     setCount(1);
   }
 
-  function handleReveal() {
-    if (!myPendingRoll) return;
-    getSocket().emit('roll_reveal', { instanceId, rollId: myPendingRoll.rollId });
-  }
-
   function adjustCount(delta: number) {
     setCount(c => Math.max(1, Math.min(20, c + delta)));
   }
 
   return (
     <div className="dice-tray">
-      {myPendingRoll && (
-        <div className="reveal-banner">
-          <span className="reveal-banner-text">A roll awaits your command…</span>
-          <span className="reveal-banner-dice">{myPendingRoll.dice}</span>
-          <button className="reveal-btn" onClick={handleReveal}>Reveal</button>
+      {myPendingRoll ? (
+        <div className="tray-awaiting">
+          <span className="awaiting-dice">{myPendingRoll.dice}</span>
+          <span className="awaiting-text">Tap the vision five times to unveil your fate</span>
+        </div>
+      ) : (
+        <div className="tray-row">
+          <div className="die-rack">
+            {DIE_TYPES.map(sides => (
+              <button
+                key={sides}
+                data-sides={sides}
+                className={`die-btn${selectedDie === sides ? ' selected' : ''}`}
+                onClick={() => setSelectedDie(prev => prev === sides ? null : sides)}
+              >
+                <span className="die-face">d{sides}</span>
+              </button>
+            ))}
+          </div>
+
+          {selectedDie !== null && (
+            <div className="roll-controls">
+              <div className="count-stepper">
+                <button className="count-btn" onClick={() => adjustCount(-1)}>−</button>
+                <input
+                  className="count-value"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={count}
+                  onChange={e => setCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+                />
+                <button className="count-btn" onClick={() => adjustCount(1)}>+</button>
+              </div>
+              <span className="count-label">× d{selectedDie}</span>
+              <button className="cast-btn" onClick={handleRoll}>Cast the Bones</button>
+            </div>
+          )}
         </div>
       )}
-
-      <div className="tray-row">
-        <div className="die-rack">
-          {DIE_TYPES.map(sides => (
-            <button
-              key={sides}
-              data-sides={sides}
-              className={`die-btn${selectedDie === sides ? ' selected' : ''}${myPendingRoll ? ' disabled' : ''}`}
-              onClick={() => !myPendingRoll && setSelectedDie(prev => prev === sides ? null : sides)}
-            >
-              <span className="die-face">d{sides}</span>
-            </button>
-          ))}
-        </div>
-
-        {selectedDie !== null && !myPendingRoll && (
-          <div className="roll-controls">
-            <div className="count-stepper">
-              <button className="count-btn" onClick={() => adjustCount(-1)}>−</button>
-              <input
-                className="count-value"
-                type="number"
-                min={1}
-                max={20}
-                value={count}
-                onChange={e => setCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-              />
-              <button className="count-btn" onClick={() => adjustCount(1)}>+</button>
-            </div>
-            <span className="count-label">× d{selectedDie}</span>
-            <button className="cast-btn" onClick={handleRoll}>Cast the Bones</button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

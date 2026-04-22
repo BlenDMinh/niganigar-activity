@@ -5,12 +5,8 @@ export function UserList() {
   const currentUserId = state.currentUser?.userId;
 
   return (
-    <div className="slab adventurers-panel">
-      <div className="slab-title">
-        <span className="slab-title-rune">✦</span>
-        <span className="slab-title-text">Adventurers</span>
-        <span className="slab-title-rune">✦</span>
-      </div>
+    <div className="panel adventurers-panel">
+      <div className="panel-title">Warband</div>
       <div className="user-list-body">
         {state.users.length === 0 ? (
           <p className="panel-empty">None yet venture forth…</p>
@@ -29,9 +25,9 @@ export function UserList() {
                     user.username[0].toUpperCase()
                   )}
                 </div>
-                <div className="user-card-info">
+                <div className="user-info">
                   <span className="user-name">{user.username}</span>
-                  {isYou && <span className="you-tag">You</span>}
+                  {isYou && <span className="you-tag">you</span>}
                 </div>
               </div>
             );

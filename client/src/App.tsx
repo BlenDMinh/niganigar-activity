@@ -1,18 +1,84 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { getSocket } from './socket/client';
 import { StoreProvider, useStore } from './state/store';
 import { UserList } from './ui/UserList';
 import { RollHistory } from './ui/RollHistory';
 import { DicePicker } from './ui/DicePicker';
+import type { RollEntry } from './types';
 import './styles/ui.css';
+
+type VideoPhase = 'background' | 'dice-ready' | 'reveal' | 'reveal-critical';
+
+interface JoinPrompt {
+  rollId: string;
+  username: string;
+  dice: string;
+}
 
 const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID as string);
 
 function ActivityApp() {
-  const { dispatch } = useStore();
+  const { state, dispatch } = useStore();
   const [instanceId, setInstanceId] = useState<string | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [appStatus, setAppStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [videoPhase, setVideoPhase] = useState<VideoPhase>('background');
+  const [clickCount, setClickCount] = useState(0);
+  const [joinPrompt, setJoinPrompt] = useState<JoinPrompt | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  // Tracks which rollId the current user is watching (as roller or watcher)
+  const watchingRollId = useRef<string | null>(null);
+
+  const currentUserId = state.currentUser?.userId;
+  const myPendingRoll = currentUserId
+    ? Object.values(state.pendingRolls).find(p => p.userId === currentUserId)
+    : null;
+
+  // Drive the video element whenever the phase changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const isLoop = videoPhase === 'background';
+    const src =
+      videoPhase === 'background'   ? '/background-video.mp4'
+      : videoPhase === 'dice-ready' ? '/dice-ready.mp4'
+      : videoPhase === 'reveal'     ? '/dice-reveal.mp4'
+      :                               '/dice-reveal-critical.mp4';
+
+    video.src = src;
+    video.loop = isLoop;
+    video.load();
+    video.play().catch(() => {});
+
+    const freeze = () => { if (!isLoop) video.pause(); };
+    video.addEventListener('ended', freeze);
+    return () => video.removeEventListener('ended', freeze);
+  }, [videoPhase]);
+
+  // 5-tap reveal mechanic: only active when current user has a pending roll
+  const handleVideoClick = useCallback(() => {
+    if (videoPhase !== 'dice-ready' || !myPendingRoll || !instanceId) return;
+    setClickCount(prev => {
+      const next = prev + 1;
+      if (next >= 5) {
+        getSocket().emit('roll_reveal', { instanceId, rollId: myPendingRoll.rollId });
+        return 0;
+      }
+      return next;
+    });
+  }, [videoPhase, myPendingRoll, instanceId]);
+
+  // Watcher opts in to see a roll
+  const handleJoin = useCallback(() => {
+    if (!joinPrompt || !instanceId) return;
+    getSocket().emit('roll_join', { instanceId, rollId: joinPrompt.rollId });
+    watchingRollId.current = joinPrompt.rollId;
+    setVideoPhase('dice-ready');
+    setJoinPrompt(null);
+  }, [joinPrompt, instanceId]);
+
+  const handleDismiss = useCallback(() => setJoinPrompt(null), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,12 +128,46 @@ function ActivityApp() {
 
         const socket = getSocket();
         socket.on('session_users', payload => dispatch({ type: 'SESSION_USERS', payload }));
-        socket.on('roll_history', payload => dispatch({ type: 'ROLL_HISTORY', payload }));
-        socket.on('user_joined', payload => dispatch({ type: 'USER_JOINED', payload }));
-        socket.on('user_left', payload => dispatch({ type: 'USER_LEFT', payload }));
-        socket.on('roll_started', payload => dispatch({ type: 'ROLL_STARTED', payload }));
-        socket.on('roll_revealed', payload => dispatch({ type: 'ROLL_REVEALED', payload }));
-        socket.on('roll_cancelled', payload => dispatch({ type: 'ROLL_CANCELLED', payload }));
+        socket.on('roll_history',  payload => dispatch({ type: 'ROLL_HISTORY',  payload }));
+        socket.on('user_joined',   payload => dispatch({ type: 'USER_JOINED',   payload }));
+        socket.on('user_left',     payload => dispatch({ type: 'USER_LEFT',     payload }));
+
+        socket.on('roll_started', payload => {
+          dispatch({ type: 'ROLL_STARTED', payload });
+          if (payload.userId === auth.user.id) {
+            // Current user is the roller — immediately watch
+            watchingRollId.current = payload.rollId;
+            setVideoPhase('dice-ready');
+            setClickCount(0);
+          } else {
+            // Someone else rolled — offer to join
+            setJoinPrompt({ rollId: payload.rollId, username: payload.username, dice: payload.dice });
+          }
+        });
+
+        // Only switch to reveal video if this user was watching the roll
+        socket.on('roll_revealed', payload => {
+          dispatch({ type: 'ROLL_REVEALED', payload });
+          if (watchingRollId.current === payload.entry.id) {
+            const entry: RollEntry = payload.entry;
+            const isD20 = entry.dice.endsWith('d20');
+            const isCritical = isD20 && entry.results.some(r => r === 1 || r === 20);
+            setVideoPhase(isCritical ? 'reveal-critical' : 'reveal');
+          }
+          watchingRollId.current = null;
+          setJoinPrompt(null);
+          setClickCount(0);
+        });
+
+        socket.on('roll_cancelled', payload => {
+          dispatch({ type: 'ROLL_CANCELLED', payload });
+          if (watchingRollId.current === payload.rollId) {
+            setVideoPhase('background');
+            watchingRollId.current = null;
+          }
+          setJoinPrompt(prev => prev?.rollId === payload.rollId ? null : prev);
+          setClickCount(0);
+        });
 
         socket.emit('join', {
           instanceId: iid,
@@ -85,12 +185,11 @@ function ActivityApp() {
           // not in a voice channel context — safe to ignore
         }
 
-        console.log('[ActivityApp] Auth complete, joined session', iid);
-        setStatus('ready');
+        setAppStatus('ready');
       } catch (e) {
         if (cancelled) return;
         console.error('[ActivityApp] Setup failed:', e);
-        setStatus('error');
+        setAppStatus('error');
       }
     }
 
@@ -98,7 +197,7 @@ function ActivityApp() {
     return () => { cancelled = true; };
   }, [dispatch]);
 
-  if (status === 'loading') {
+  if (appStatus === 'loading') {
     return (
       <div className="auth-screen">
         <div className="auth-sigil">⚄</div>
@@ -107,7 +206,7 @@ function ActivityApp() {
     );
   }
 
-  if (status === 'error') {
+  if (appStatus === 'error') {
     return (
       <div className="auth-screen">
         <div className="auth-sigil">✦</div>
@@ -118,17 +217,50 @@ function ActivityApp() {
     );
   }
 
+  const isClickable = videoPhase === 'dice-ready' && !!myPendingRoll;
+
   return (
     <div className="app-root">
-      <video className="bg-video" autoPlay loop muted playsInline>
-        <source src="/background.webm" type="video/webm" />
-        <source src="/background.mp4" type="video/mp4" />
-      </video>
-      <div className="bg-overlay" />
+      {/* Center-stage video — the main focus */}
+      <div
+        className={`video-stage${isClickable ? ' is-clickable' : ''}`}
+        onClick={handleVideoClick}
+      >
+        <video ref={videoRef} className="center-video" autoPlay loop muted playsInline />
+
+        {/* Tap-to-reveal overlay — only shown to the roller */}
+        {isClickable && (
+          <div className="tap-overlay">
+            <p className="tap-hint">Tap to unveil your fate</p>
+            <div className="tap-runes">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <span key={i} className={`tap-rune${i < clickCount ? ' lit' : ''}`}>◈</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* UI panels — absolute overlay, pointer-events managed per-child */}
       <div className="stage">
         <UserList />
         <RollHistory />
         {instanceId && <DicePicker instanceId={instanceId} />}
+
+        {/* Watch prompt — shown to non-rollers when someone starts a roll */}
+        {joinPrompt && !myPendingRoll && (
+          <div className="join-prompt">
+            <div className="join-info">
+              <span className="join-roller">{joinPrompt.username}</span>
+              <span className="join-text"> is casting </span>
+              <span className="join-dice">{joinPrompt.dice}</span>
+            </div>
+            <div className="join-actions">
+              <button className="join-watch-btn" onClick={handleJoin}>Watch</button>
+              <button className="join-dismiss-btn" onClick={handleDismiss}>✕</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
