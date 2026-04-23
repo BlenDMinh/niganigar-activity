@@ -894,17 +894,20 @@
   text-shadow: 0 1px 6px rgba(0,0,0,0.9);
 }
 
+.music-panel__np-title svg {
+  flex-shrink: 0;
+}
+
 .music-panel__np-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-family: 'Bonescript', serif;
-  font-size: 22px;
+  font-family: inherit;
+  font-size: 12px;
   color: var(--text);
-  line-height: 1.2;
+  line-height: 1.4;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
   max-width: 100%;
   text-shadow: 0 2px 12px rgba(0,0,0,0.95);
 }

@@ -7,6 +7,7 @@ export interface SfxTrack {
   id: string;
   label: string;
   src: string;
+  categorySrc?: Partial<Record<CategoryKey, string>>;
 }
 
 export const CATEGORY_KEYS = ['tavern', 'adventure', 'combat', 'mystery', 'rest'] as const;
@@ -49,11 +50,16 @@ export const MUSIC_CATEGORIES: Record<CategoryKey, Song[]> = {
 };
 
 export const SFX_TRACKS: SfxTrack[] = [
-  { id: 'rain',   label: 'Rain',   src: '' },
-  { id: 'fire',   label: 'Fire',   src: '' },
-  { id: 'wind',   label: 'Wind',   src: '' },
+  {
+    id: 'rain', label: 'Rain', src: '/audio/rain.mp3', categorySrc: {
+      tavern: '/audio/rain-muffled.mp3',
+      rest: '/audio/rain-muffled.mp3',
+    }
+  },
+  { id: 'fire',   label: 'Fire',   src: '/audio/crackling-fire.mp3' },
+  { id: 'wind',   label: 'Wind',   src: '/audio/wind.mp3' },
   { id: 'crowd',  label: 'Crowd',  src: '' },
   { id: 'forest', label: 'Forest', src: '' },
   { id: 'ocean',  label: 'Ocean',  src: '' },
-  { id: 'swords', label: 'Swords', src: '' },
+  { id: 'swords', label: 'Swords', src: '/audio/sword-clash.mp3' },
 ];

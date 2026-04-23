@@ -116,7 +116,8 @@ export function MusicPanel({ instanceId }: Props) {
   const musicVolumeRef = useRef(musicVolume);
   useEffect(() => { musicVolumeRef.current = musicVolume; }, [musicVolume]);
 
-  const sfxRefs = useRef<Record<string, HTMLAudioElement>>({});
+  const sfxRefs    = useRef<Record<string, HTMLAudioElement>>({});
+  const sfxSrcsRef = useRef<Record<string, string>>({});
 
   // ── socket sync ─────────────────────────────────────────────────
   useEffect(() => {
@@ -188,19 +189,37 @@ export function MusicPanel({ instanceId }: Props) {
   useEffect(() => {
     SFX_TRACKS.forEach(track => {
       const vol = sfxVolumes[track.id] ?? 0;
+      const src = track.categorySrc?.[category] || track.src;
+
       if (!sfxRefs.current[track.id]) {
-        sfxRefs.current[track.id] = new Audio(track.src);
+        sfxRefs.current[track.id] = new Audio();
         sfxRefs.current[track.id].loop = true;
+        sfxSrcsRef.current[track.id] = '';
       }
+
       const audio = sfxRefs.current[track.id];
+
+      if (sfxSrcsRef.current[track.id] !== src) {
+        const wasPlaying = !audio.paused && audio.volume > 0;
+        audio.pause();
+        audio.src = src;
+        audio.load();
+        audio.loop = true;
+        sfxSrcsRef.current[track.id] = src;
+        if (wasPlaying && vol > 0 && src) void audio.play().catch(() => {});
+      }
+
       audio.volume = vol;
-      if (vol > 0 && track.src) audio.play().catch(() => {}); else audio.pause();
+      if (vol > 0 && src) void audio.play().catch(() => {}); else audio.pause();
     });
-  }, [sfxVolumes]);
+  }, [sfxVolumes, category]);
 
   // ── handlers ─────────────────────────────────────────────────────
   function handleCategoryClick(cat: CategoryKey) {
-    const nextIndex = cat === category ? (songIndex + 1) % MUSIC_CATEGORIES[cat].length : 0;
+    const len = MUSIC_CATEGORIES[cat].length;
+    const nextIndex = cat === category
+      ? (songIndex + 1) % len
+      : Math.floor(Math.random() * len);
     setCategory(cat); setSongIndex(nextIndex);
     getSocket().emit('music_change', { instanceId, category: cat, songIndex: nextIndex });
   }
@@ -285,7 +304,6 @@ export function MusicPanel({ instanceId }: Props) {
         <span className="music-panel__np-title">
           <NoteIcon />
           {currentSong?.title ?? '—'}
-          {!currentSong?.src && <em className="music-panel__np-placeholder"> · placeholder</em>}
         </span>
       </div>
 
