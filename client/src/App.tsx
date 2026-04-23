@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
+import { AnimatePresence, motion, useAnimate } from 'motion/react';
 import { getSocket } from './socket/client';
 import { StoreProvider, useStore } from './state/store';
-import { UserList } from './ui/UserList';
-import { RollHistory } from './ui/RollHistory';
-import { DicePicker } from './ui/DicePicker';
+import { PlayerBar } from './organisms/PlayerBar';
+import { RollToast } from './organisms/RollToast';
+import { RollLogModal } from './organisms/RollLogModal';
+import { DiceMenu } from './organisms/DiceMenu';
+import { MusicPanel } from './organisms/MusicPanel';
+import { TapIndicator } from './atoms/TapIndicator';
 import type { RollEntry } from './types';
 import './styles/ui.css';
 
@@ -25,9 +29,13 @@ function ActivityApp() {
   const [videoPhase, setVideoPhase] = useState<VideoPhase>('background');
   const [clickCount, setClickCount] = useState(0);
   const [joinPrompt, setJoinPrompt] = useState<JoinPrompt | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   // Tracks which rollId the current user is watching (as roller or watcher)
   const watchingRollId = useRef<string | null>(null);
+
+  // useAnimate for page-shake effect
+  const [appScope, animateApp] = useAnimate();
 
   const currentUserId = state.currentUser?.userId;
   const myPendingRoll = currentUserId
@@ -56,18 +64,27 @@ function ActivityApp() {
     return () => video.removeEventListener('ended', freeze);
   }, [videoPhase]);
 
-  // 5-tap reveal mechanic: only active when current user has a pending roll
+  // 5-tap reveal mechanic with escalating page shake on each tap
   const handleVideoClick = useCallback(() => {
     if (videoPhase !== 'dice-ready' || !myPendingRoll || !instanceId) return;
+
     setClickCount(prev => {
       const next = prev + 1;
+      // Shake intensity scales with tap number (4, 6.5, 9, 11.5, 16 px)
+      const amp = 4 + next * 2.5;
+      void animateApp(
+        appScope.current,
+        { x: [-amp, amp, -(amp * 0.65), amp * 0.65, -(amp * 0.3), amp * 0.3, 0] },
+        { duration: 0.38, ease: [0.36, 0.07, 0.19, 0.97] }
+      );
+
       if (next >= 5) {
         getSocket().emit('roll_reveal', { instanceId, rollId: myPendingRoll.rollId });
         return 0;
       }
       return next;
     });
-  }, [videoPhase, myPendingRoll, instanceId]);
+  }, [videoPhase, myPendingRoll, instanceId, appScope, animateApp]);
 
   // Watcher opts in to see a roll
   const handleJoin = useCallback(() => {
@@ -200,8 +217,8 @@ function ActivityApp() {
   if (appStatus === 'loading') {
     return (
       <div className="auth-screen">
-        <div className="auth-sigil">⚄</div>
-        <p className="auth-word">Entering the realm…</p>
+        <div className="auth-icon">⚄</div>
+        <p className="auth-status">Connecting…</p>
       </div>
     );
   }
@@ -209,10 +226,8 @@ function ActivityApp() {
   if (appStatus === 'error') {
     return (
       <div className="auth-screen">
-        <div className="auth-sigil">✦</div>
-        <p className="auth-err">
-          The arcane connection failed.<br />Reload to try again.
-        </p>
+        <div className="auth-icon auth-icon--error">✕</div>
+        <p className="auth-error">Connection failed.<br />Reload to try again.</p>
       </div>
     );
   }
@@ -220,47 +235,87 @@ function ActivityApp() {
   const isClickable = videoPhase === 'dice-ready' && !!myPendingRoll;
 
   return (
-    <div className="app-root">
-      {/* Center-stage video — the main focus */}
+    <div className="app-root" ref={appScope}>
+      {/* Full-screen video background */}
       <div
-        className={`video-stage${isClickable ? ' is-clickable' : ''}`}
+        className={`video-stage${isClickable ? ' video-stage--clickable' : ''}`}
         onClick={handleVideoClick}
       >
-        <video ref={videoRef} className="center-video" autoPlay loop muted playsInline />
+        <video ref={videoRef} className="video-stage__video" autoPlay loop muted playsInline />
 
-        {/* Tap-to-reveal overlay — only shown to the roller */}
-        {isClickable && (
-          <div className="tap-overlay">
-            <p className="tap-hint">Tap to unveil your fate</p>
-            <div className="tap-runes">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <span key={i} className={`tap-rune${i < clickCount ? ' lit' : ''}`}>◈</span>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Tap-to-reveal overlay — shown only to the roller */}
+        <AnimatePresence>
+          {isClickable && (
+            <motion.div
+              className="tap-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, transition: { duration: 0.3 } }}
+              transition={{ duration: 0.25 }}
+            >
+              <p className="tap-overlay__hint">Tap to reveal</p>
+              <div className="tap-overlay__dots">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <TapIndicator key={i} filled={i < clickCount} />
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* UI panels — absolute overlay, pointer-events managed per-child */}
-      <div className="stage">
-        <UserList />
-        <RollHistory />
-        {instanceId && <DicePicker instanceId={instanceId} />}
+      {/* HUD overlay — pointer-events: none, children opt in */}
+      <div className="hud">
+        {/* Top-left: floating player list */}
+        <PlayerBar />
 
-        {/* Watch prompt — shown to non-rollers when someone starts a roll */}
-        {joinPrompt && !myPendingRoll && (
-          <div className="join-prompt">
-            <div className="join-info">
-              <span className="join-roller">{joinPrompt.username}</span>
-              <span className="join-text"> is casting </span>
-              <span className="join-dice">{joinPrompt.dice}</span>
-            </div>
-            <div className="join-actions">
-              <button className="join-watch-btn" onClick={handleJoin}>Watch</button>
-              <button className="join-dismiss-btn" onClick={handleDismiss}>✕</button>
-            </div>
-          </div>
-        )}
+        {/* Bottom-center: roll results popup (auto-dismiss, no log button) */}
+        <RollToast />
+
+        {/* Top-right: persistent log button */}
+        <motion.button
+          className="log-btn"
+          onClick={() => setLogOpen(true)}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.94 }}
+          transition={{ type: 'spring', stiffness: 480, damping: 28 }}
+        >
+          📜 Roll Log
+        </motion.button>
+
+        {/* Bottom-left: music panel */}
+        {instanceId && <MusicPanel instanceId={instanceId} />}
+
+        {/* Bottom-center: watch prompt */}
+        <AnimatePresence>
+          {joinPrompt && !myPendingRoll && (
+            <motion.div
+              className="join-prompt"
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 440, damping: 30 }}
+            >
+              <div className="join-prompt__info">
+                <span className="join-prompt__roller">{joinPrompt.username}</span>
+                <span> is rolling </span>
+                <span className="join-prompt__dice">{joinPrompt.dice}</span>
+              </div>
+              <div className="join-prompt__actions">
+                <button className="join-prompt__watch" onClick={handleJoin}>Watch</button>
+                <button className="join-prompt__dismiss" onClick={handleDismiss}>✕</button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Bottom-right: dice FAB + expandable menu */}
+        {instanceId && <DiceMenu instanceId={instanceId} />}
+
+        {/* Full roll log modal with animated entrance/exit */}
+        <AnimatePresence>
+          {logOpen && <RollLogModal onClose={() => setLogOpen(false)} />}
+        </AnimatePresence>
       </div>
     </div>
   );

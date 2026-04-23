@@ -57,7 +57,9 @@ function reducer(state: State, action: Action): State {
     }
     case 'ROLL_REVEALED': {
       const rest = omit(state.pendingRolls, action.payload.entry.id);
-      if (action.payload.entry.isHidden) {
+      const isMyRoll = action.payload.entry.userId === state.currentUser?.userId;
+      // Hidden rolls are excluded from history for everyone except the roller
+      if (action.payload.entry.isHidden && !isMyRoll) {
         return { ...state, pendingRolls: rest };
       }
       return {
