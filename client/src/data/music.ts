@@ -23,14 +23,14 @@ export const CATEGORY_LABELS: Record<CategoryKey, string> = {
 
 export const MUSIC_CATEGORIES: Record<CategoryKey, Song[]> = {
   tavern: [
-    { title: 'The Wandering Bard',    src: '' },
-    { title: 'Hearth & Mead',         src: '' },
-    { title: 'Merchant Quarter',      src: '' },
+    { title: 'The Wandering Bard',    src: '/audio/tavern_01.mp3' },
+    { title: 'Hearth & Mead',         src: '/audio/tavern_02.mp3' },
+    { title: 'Merchant Quarter',      src: '/audio/tavern_03.mp3' },
   ],
   adventure: [
-    { title: 'Road to the Unknown',   src: '' },
-    { title: 'Through the Valley',    src: '' },
-    { title: 'Open Horizon',          src: '' },
+    { title: 'Road to the Unknown',   src: '/audio/traveling_01.mp3' },
+    { title: 'Through the Valley',    src: '/audio/traveling_02.mp3' },
+    { title: 'Open Horizon',          src: '/audio/traveling_03.mp3' },
   ],
   combat: [
     { title: 'Limbus Company OST - Canto IX Boss 1 Battle Theme 2', src: '/audio/combat_01.mp3' },
@@ -38,9 +38,9 @@ export const MUSIC_CATEGORIES: Record<CategoryKey, Song[]> = {
     { title: 'Final Stand',           src: '' },
   ],
   mystery: [
-    { title: 'Secrets of the Vault',  src: '' },
-    { title: 'Whispers in the Dark',  src: '' },
-    { title: 'The Hidden Chamber',    src: '' },
+    { title: 'Devilish Mystery - Jigoku No Sata Mo Kaneshidai',  src: '/audio/mystery_01.mp3' },
+    { title: 'Intense Mystery - Kizuna',  src: '/audio/mystery_02.mp3' },
+    { title: 'Playful Mystery - Kuchinawa',    src: '/audio/mystery_03.mp3' },
   ],
   rest: [
     { title: 'Starlit Meadow',        src: '' },
