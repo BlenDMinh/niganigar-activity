@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { DiscordSDK } from '@discord/embedded-app-sdk';
-import { AnimatePresence, motion, useAnimate } from 'motion/react';
-import { getSocket } from './socket/client';
-import { StoreProvider, useStore } from './state/store';
-import { PlayerBar } from './organisms/PlayerBar';
-import { RollToast } from './organisms/RollToast';
-import { RollLogModal } from './organisms/RollLogModal';
-import { DiceMenu } from './organisms/DiceMenu';
-import { MusicPanel } from './organisms/MusicPanel';
-import { TapIndicator } from './atoms/TapIndicator';
-import type { RollEntry } from './types';
-import './styles/ui.css';
+import { useEffect, useRef, useState, useCallback } from "react";
+import { DiscordSDK } from "@discord/embedded-app-sdk";
+import { AnimatePresence, motion, useAnimate } from "motion/react";
+import { getSocket } from "./socket/client";
+import { StoreProvider, useStore } from "./state/store";
+import { PlayerBar } from "./organisms/PlayerBar";
+import { RollToast } from "./organisms/RollToast";
+import { RollLogModal } from "./organisms/RollLogModal";
+import { DiceMenu } from "./organisms/DiceMenu";
+import { MusicPanel } from "./organisms/MusicPanel";
+import { TapIndicator } from "./atoms/TapIndicator";
+import type { RollEntry } from "./types";
+import "./styles/ui.css";
 
-type VideoPhase = 'background' | 'dice-ready' | 'reveal' | 'reveal-critical';
+type VideoPhase = "background" | "dice-ready" | "reveal" | "reveal-critical";
 
 interface JoinPrompt {
   rollId: string;
@@ -20,13 +20,17 @@ interface JoinPrompt {
   dice: string;
 }
 
-const discordSdk = new DiscordSDK(import.meta.env.VITE_DISCORD_CLIENT_ID as string);
+const discordSdk = new DiscordSDK(
+  import.meta.env.VITE_DISCORD_CLIENT_ID as string,
+);
 
 function ActivityApp() {
   const { state, dispatch } = useStore();
   const [instanceId, setInstanceId] = useState<string | null>(null);
-  const [appStatus, setAppStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [videoPhase, setVideoPhase] = useState<VideoPhase>('background');
+  const [appStatus, setAppStatus] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [videoPhase, setVideoPhase] = useState<VideoPhase>("background");
   const [clickCount, setClickCount] = useState(0);
   const [joinPrompt, setJoinPrompt] = useState<JoinPrompt | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -39,7 +43,7 @@ function ActivityApp() {
 
   const currentUserId = state.currentUser?.userId;
   const myPendingRoll = currentUserId
-    ? Object.values(state.pendingRolls).find(p => p.userId === currentUserId)
+    ? Object.values(state.pendingRolls).find((p) => p.userId === currentUserId)
     : null;
 
   // Drive the video element whenever the phase changes
@@ -47,39 +51,49 @@ function ActivityApp() {
     const video = videoRef.current;
     if (!video) return;
 
-    const isLoop = videoPhase === 'background';
+    const isLoop = videoPhase === "background";
     const src =
-      videoPhase === 'background'   ? '/background-video.mp4'
-      : videoPhase === 'dice-ready' ? '/dice-ready.mp4'
-      : videoPhase === 'reveal'     ? '/dice-reveal.mp4'
-      :                               '/dice-reveal-critical.mp4';
+      videoPhase === "background"
+        ? "/background-video.mp4"
+        : videoPhase === "dice-ready"
+          ? "/dice-ready.mp4"
+          : videoPhase === "reveal"
+            ? "/dice-reveal.mp4"
+            : "/dice-reveal-critical.mp4";
 
     video.src = src;
     video.loop = isLoop;
     video.load();
     video.play().catch(() => {});
 
-    const freeze = () => { if (!isLoop) video.pause(); };
-    video.addEventListener('ended', freeze);
-    return () => video.removeEventListener('ended', freeze);
+    const freeze = () => {
+      if (!isLoop) video.pause();
+    };
+    video.addEventListener("ended", freeze);
+    return () => video.removeEventListener("ended", freeze);
   }, [videoPhase]);
 
   // 5-tap reveal mechanic with escalating page shake on each tap
   const handleVideoClick = useCallback(() => {
-    if (videoPhase !== 'dice-ready' || !myPendingRoll || !instanceId) return;
+    if (videoPhase !== "dice-ready" || !myPendingRoll || !instanceId) return;
 
-    setClickCount(prev => {
+    setClickCount((prev) => {
       const next = prev + 1;
       // Shake intensity scales with tap number (4, 6.5, 9, 11.5, 16 px)
       const amp = 4 + next * 2.5;
       void animateApp(
         appScope.current,
-        { x: [-amp, amp, -(amp * 0.65), amp * 0.65, -(amp * 0.3), amp * 0.3, 0] },
-        { duration: 0.38, ease: [0.36, 0.07, 0.19, 0.97] }
+        {
+          x: [-amp, amp, -(amp * 0.65), amp * 0.65, -(amp * 0.3), amp * 0.3, 0],
+        },
+        { duration: 0.38, ease: [0.36, 0.07, 0.19, 0.97] },
       );
 
       if (next >= 5) {
-        getSocket().emit('roll_reveal', { instanceId, rollId: myPendingRoll.rollId });
+        getSocket().emit("roll_reveal", {
+          instanceId,
+          rollId: myPendingRoll.rollId,
+        });
         return 0;
       }
       return next;
@@ -89,9 +103,9 @@ function ActivityApp() {
   // Watcher opts in to see a roll
   const handleJoin = useCallback(() => {
     if (!joinPrompt || !instanceId) return;
-    getSocket().emit('roll_join', { instanceId, rollId: joinPrompt.rollId });
+    getSocket().emit("roll_join", { instanceId, rollId: joinPrompt.rollId });
     watchingRollId.current = joinPrompt.rollId;
-    setVideoPhase('dice-ready');
+    setVideoPhase("dice-ready");
     setJoinPrompt(null);
   }, [joinPrompt, instanceId]);
 
@@ -107,16 +121,16 @@ function ActivityApp() {
 
         const { code } = await discordSdk.commands.authorize({
           client_id: import.meta.env.VITE_DISCORD_CLIENT_ID as string,
-          response_type: 'code',
-          state: '',
-          prompt: 'none',
-          scope: ['identify', 'guilds', 'applications.commands'],
+          response_type: "code",
+          state: "",
+          prompt: "none",
+          scope: ["identify", "guilds", "applications.commands"],
         });
         if (cancelled) return;
 
-        const res = await fetch('/api/discord-auth/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const res = await fetch("/api/discord-auth/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code }),
         });
         if (cancelled) return;
@@ -124,13 +138,13 @@ function ActivityApp() {
         const { access_token } = (await res.json()) as { access_token: string };
         const auth = await discordSdk.commands.authenticate({ access_token });
         if (cancelled) return;
-        if (!auth) throw new Error('authenticate() returned null');
+        if (!auth) throw new Error("authenticate() returned null");
 
         const iid = discordSdk.instanceId;
-        const cid = discordSdk.channelId ?? '';
+        const cid = discordSdk.channelId ?? "";
 
         dispatch({
-          type: 'SET_AUTH',
+          type: "SET_AUTH",
           payload: {
             user: {
               userId: auth.user.id,
@@ -144,49 +158,64 @@ function ActivityApp() {
         setInstanceId(iid);
 
         const socket = getSocket();
-        socket.on('session_users', payload => dispatch({ type: 'SESSION_USERS', payload }));
-        socket.on('roll_history',  payload => dispatch({ type: 'ROLL_HISTORY',  payload }));
-        socket.on('user_joined',   payload => dispatch({ type: 'USER_JOINED',   payload }));
-        socket.on('user_left',     payload => dispatch({ type: 'USER_LEFT',     payload }));
+        socket.on("session_users", (payload) =>
+          dispatch({ type: "SESSION_USERS", payload }),
+        );
+        socket.on("roll_history", (payload) =>
+          dispatch({ type: "ROLL_HISTORY", payload }),
+        );
+        socket.on("user_joined", (payload) =>
+          dispatch({ type: "USER_JOINED", payload }),
+        );
+        socket.on("user_left", (payload) =>
+          dispatch({ type: "USER_LEFT", payload }),
+        );
 
-        socket.on('roll_started', payload => {
-          dispatch({ type: 'ROLL_STARTED', payload });
+        socket.on("roll_started", (payload) => {
+          dispatch({ type: "ROLL_STARTED", payload });
           if (payload.userId === auth.user.id) {
             // Current user is the roller — immediately watch
             watchingRollId.current = payload.rollId;
-            setVideoPhase('dice-ready');
+            setVideoPhase("dice-ready");
             setClickCount(0);
           } else {
             // Someone else rolled — offer to join
-            setJoinPrompt({ rollId: payload.rollId, username: payload.username, dice: payload.dice });
+            setJoinPrompt({
+              rollId: payload.rollId,
+              username: payload.username,
+              dice: payload.dice,
+            });
           }
         });
 
         // Only switch to reveal video if this user was watching the roll
-        socket.on('roll_revealed', payload => {
-          dispatch({ type: 'ROLL_REVEALED', payload });
+        socket.on("roll_revealed", (payload) => {
+          dispatch({ type: "ROLL_REVEALED", payload });
           if (watchingRollId.current === payload.entry.id) {
             const entry: RollEntry = payload.entry;
-            const isD20 = entry.dice.endsWith('d20');
-            const isCritical = isD20 && entry.results.some(r => r === 1 || r === 20);
-            setVideoPhase(isCritical ? 'reveal-critical' : 'reveal');
+            const isD20 = entry.dice.endsWith("d20");
+            const isCritical =
+              isD20 && entry.results.some((r) => r === 1 || r === 20);
+            setVideoPhase(isCritical ? "reveal-critical" : "reveal");
           }
           watchingRollId.current = null;
           setJoinPrompt(null);
           setClickCount(0);
         });
 
-        socket.on('roll_cancelled', payload => {
-          dispatch({ type: 'ROLL_CANCELLED', payload });
+        socket.on("roll_cancelled", (payload) => {
+          dispatch({ type: "ROLL_CANCELLED", payload });
           if (watchingRollId.current === payload.rollId) {
-            setVideoPhase('background');
+            setVideoPhase("background");
             watchingRollId.current = null;
           }
-          setJoinPrompt(prev => prev?.rollId === payload.rollId ? null : prev);
+          setJoinPrompt((prev) =>
+            prev?.rollId === payload.rollId ? null : prev,
+          );
           setClickCount(0);
         });
 
-        socket.emit('join', {
+        socket.emit("join", {
           instanceId: iid,
           channelId: cid,
           user: {
@@ -197,24 +226,29 @@ function ActivityApp() {
         });
 
         try {
-          discordSdk.subscribe('ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE', () => {});
+          discordSdk.subscribe(
+            "ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE",
+            () => {},
+          );
         } catch {
           // not in a voice channel context — safe to ignore
         }
 
-        setAppStatus('ready');
+        setAppStatus("ready");
       } catch (e) {
         if (cancelled) return;
-        console.error('[ActivityApp] Setup failed:', e);
-        setAppStatus('error');
+        console.error("[ActivityApp] Setup failed:", e);
+        setAppStatus("error");
       }
     }
 
     void run();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [dispatch]);
 
-  if (appStatus === 'loading') {
+  if (appStatus === "loading") {
     return (
       <div className="auth-screen">
         <div className="auth-icon">⚄</div>
@@ -223,25 +257,36 @@ function ActivityApp() {
     );
   }
 
-  if (appStatus === 'error') {
+  if (appStatus === "error") {
     return (
       <div className="auth-screen">
         <div className="auth-icon auth-icon--error">✕</div>
-        <p className="auth-error">Connection failed.<br />Reload to try again.</p>
+        <p className="auth-error">
+          Connection failed.
+          <br />
+          Reload to try again.
+        </p>
       </div>
     );
   }
 
-  const isClickable = videoPhase === 'dice-ready' && !!myPendingRoll;
+  const isClickable = videoPhase === "dice-ready" && !!myPendingRoll;
 
   return (
     <div className="app-root" ref={appScope}>
       {/* Full-screen video background */}
       <div
-        className={`video-stage${isClickable ? ' video-stage--clickable' : ''}`}
+        className={`video-stage${isClickable ? " video-stage--clickable" : ""}`}
         onClick={handleVideoClick}
       >
-        <video ref={videoRef} className="video-stage__video" autoPlay loop muted playsInline />
+        <video
+          ref={videoRef}
+          className="video-stage__video"
+          autoPlay
+          loop
+          muted
+          playsInline
+        />
 
         {/* Tap-to-reveal overlay — shown only to the roller */}
         <AnimatePresence>
@@ -278,7 +323,7 @@ function ActivityApp() {
           onClick={() => setLogOpen(true)}
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.94 }}
-          transition={{ type: 'spring', stiffness: 480, damping: 28 }}
+          transition={{ type: "spring", stiffness: 480, damping: 28 }}
         >
           📜 Roll Log
         </motion.button>
@@ -294,16 +339,25 @@ function ActivityApp() {
               initial={{ opacity: 0, y: 10, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.95 }}
-              transition={{ type: 'spring', stiffness: 440, damping: 30 }}
+              transition={{ type: "spring", stiffness: 440, damping: 30 }}
             >
               <div className="join-prompt__info">
-                <span className="join-prompt__roller">{joinPrompt.username}</span>
+                <span className="join-prompt__roller">
+                  {joinPrompt.username}
+                </span>
                 <span> is rolling </span>
                 <span className="join-prompt__dice">{joinPrompt.dice}</span>
               </div>
               <div className="join-prompt__actions">
-                <button className="join-prompt__watch" onClick={handleJoin}>Watch</button>
-                <button className="join-prompt__dismiss" onClick={handleDismiss}>✕</button>
+                <button className="join-prompt__watch" onClick={handleJoin}>
+                  Watch
+                </button>
+                <button
+                  className="join-prompt__dismiss"
+                  onClick={handleDismiss}
+                >
+                  ✕
+                </button>
               </div>
             </motion.div>
           )}

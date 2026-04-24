@@ -3,5 +3,9 @@ interface Props {
 }
 
 export function TapIndicator({ filled }: Props) {
-  return <span className={`tap-indicator${filled ? ' tap-indicator--filled' : ''}`} />;
+  return (
+    <span
+      className={`tap-indicator${filled ? " tap-indicator--filled" : ""}`}
+    />
+  );
 }

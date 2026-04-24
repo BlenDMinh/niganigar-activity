@@ -25,21 +25,15 @@ export interface ClientToServerEvents {
   join: (payload: {
     instanceId: string;
     channelId: string;
-    user: Omit<User, 'socketId'>;
+    user: Omit<User, "socketId">;
   }) => void;
   roll_start: (payload: {
     instanceId: string;
     dice: string;
     isHidden: boolean;
   }) => void;
-  roll_reveal: (payload: {
-    instanceId: string;
-    rollId: string;
-  }) => void;
-  roll_join: (payload: {
-    instanceId: string;
-    rollId: string;
-  }) => void;
+  roll_reveal: (payload: { instanceId: string; rollId: string }) => void;
+  roll_join: (payload: { instanceId: string; rollId: string }) => void;
   music_change: (payload: {
     instanceId: string;
     category: string;
@@ -57,8 +51,17 @@ export interface ServerToClientEvents {
   roll_history: (payload: { entries: RollEntry[] }) => void;
   user_joined: (payload: { user: User }) => void;
   user_left: (payload: { userId: string }) => void;
-  roll_started: (payload: { rollId: string; userId: string; username: string; dice: string }) => void;
-  watcher_joined: (payload: { rollId: string; userId: string; username: string }) => void;
+  roll_started: (payload: {
+    rollId: string;
+    userId: string;
+    username: string;
+    dice: string;
+  }) => void;
+  watcher_joined: (payload: {
+    rollId: string;
+    userId: string;
+    username: string;
+  }) => void;
   roll_revealed: (payload: { entry: RollEntry; watcherIds: string[] }) => void;
   roll_cancelled: (payload: { rollId: string; userId: string }) => void;
   error: (payload: { message: string }) => void;

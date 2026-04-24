@@ -1,12 +1,15 @@
-import { Pip } from '../atoms/Pip';
-import type { RollEntry } from '../types';
+import { Pip } from "../atoms/Pip";
+import type { RollEntry } from "../types";
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function isCritical(dice: string, results: number[]): boolean {
-  return dice.endsWith('d20') && results.some(r => r === 1 || r === 20);
+  return dice.endsWith("d20") && results.some((r) => r === 1 || r === 20);
 }
 
 interface Props {
@@ -18,11 +21,13 @@ export function RollEntryRow({ entry }: Props) {
   const multiDie = entry.results.length > 1;
 
   return (
-    <div className={`roll-entry${critical ? ' roll-entry--critical' : ''}`}>
+    <div className={`roll-entry${critical ? " roll-entry--critical" : ""}`}>
       <div className="roll-entry__row">
         <span className="roll-entry__name">{entry.username}</span>
         <span className="roll-entry__dice-tag">{entry.dice}</span>
-        {entry.isHidden && <span className="roll-entry__hidden-badge">hidden</span>}
+        {entry.isHidden && (
+          <span className="roll-entry__hidden-badge">hidden</span>
+        )}
         {critical && <span className="roll-entry__crit-badge">crit</span>}
         <span className="roll-entry__total">{entry.total}</span>
       </div>

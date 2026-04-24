@@ -7,7 +7,10 @@ interface Props {
 
 export function Avatar({ userId, avatar, username, size = 30 }: Props) {
   return (
-    <div className="avatar" style={{ width: size, height: size, fontSize: size * 0.38 }}>
+    <div
+      className="avatar"
+      style={{ width: size, height: size, fontSize: size * 0.38 }}
+    >
       {avatar ? (
         <img
           src={`https://cdn.discordapp.com/avatars/${userId}/${avatar}.png?size=64`}

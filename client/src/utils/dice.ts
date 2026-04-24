@@ -8,7 +8,8 @@ export function parseDice(notation: string): { count: number; sides: number } {
   const sides = parseInt(match[2], 10);
 
   if (count < 1 || count > 20) throw new Error(`Die count must be 1–20`);
-  if (!VALID_SIDES.includes(sides)) throw new Error(`Invalid die sides: ${sides}`);
+  if (!VALID_SIDES.includes(sides))
+    throw new Error(`Invalid die sides: ${sides}`);
 
   return { count, sides };
 }
