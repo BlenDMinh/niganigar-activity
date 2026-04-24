@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { DiscordSDK } from "@discord/embedded-app-sdk";
-import { AnimatePresence, motion, useAnimate } from "motion/react";
+import {
+  AnimatePresence,
+  motion,
+  useAnimate,
+  useMotionValue,
+  useSpring,
+} from "motion/react";
 import { getSocket } from "./socket/client";
 import { StoreProvider, useStore } from "./state/store";
 import { PlayerBar } from "./organisms/PlayerBar";
@@ -37,9 +43,38 @@ function ActivityApp() {
   const videoRef = useRef<HTMLVideoElement>(null);
   // Tracks which rollId the current user is watching (as roller or watcher)
   const watchingRollId = useRef<string | null>(null);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const woodHitRef = useRef<HTMLAudioElement | null>(null);
+  const diceRollRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const hit = new Audio("/audio/wood-hit.mp3");
+    hit.load();
+    woodHitRef.current = hit;
+
+    const roll = new Audio("/audio/dice-roll.mp3");
+    roll.load();
+    diceRollRef.current = roll;
+  }, []);
 
   // useAnimate for page-shake effect
   const [appScope, animateApp] = useAnimate();
+
+  // Background parallax
+  const bgRawX = useMotionValue(0);
+  const bgRawY = useMotionValue(0);
+  const bgX = useSpring(bgRawX, { stiffness: 40, damping: 18 });
+  const bgY = useSpring(bgRawY, { stiffness: 40, damping: 18 });
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      const cx = window.innerWidth / 2;
+      const cy = window.innerHeight / 2;
+      bgRawX.set(((e.clientX - cx) / cx) * -10);
+      bgRawY.set(((e.clientY - cy) / cy) * -10);
+    },
+    [bgRawX, bgRawY],
+  );
 
   const currentUserId = state.currentUser?.userId;
   const myPendingRoll = currentUserId
@@ -77,6 +112,10 @@ function ActivityApp() {
   const handleVideoClick = useCallback(() => {
     if (videoPhase !== "dice-ready" || !myPendingRoll || !instanceId) return;
 
+    if (woodHitRef.current) {
+      (woodHitRef.current.cloneNode() as HTMLAudioElement).play().catch(() => {});
+    }
+
     setClickCount((prev) => {
       const next = prev + 1;
       // Shake intensity scales with tap number (4, 6.5, 9, 11.5, 16 px)
@@ -90,6 +129,9 @@ function ActivityApp() {
       );
 
       if (next >= 5) {
+        if (diceRollRef.current) {
+          (diceRollRef.current.cloneNode() as HTMLAudioElement).play().catch(() => {});
+        }
         getSocket().emit("roll_reveal", {
           instanceId,
           rollId: myPendingRoll.rollId,
@@ -197,6 +239,12 @@ function ActivityApp() {
             const isCritical =
               isD20 && entry.results.some((r) => r === 1 || r === 20);
             setVideoPhase(isCritical ? "reveal-critical" : "reveal");
+
+            if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+            revealTimerRef.current = setTimeout(
+              () => setVideoPhase("background"),
+              5000,
+            );
           }
           watchingRollId.current = null;
           setJoinPrompt(null);
@@ -206,6 +254,7 @@ function ActivityApp() {
         socket.on("roll_cancelled", (payload) => {
           dispatch({ type: "ROLL_CANCELLED", payload });
           if (watchingRollId.current === payload.rollId) {
+            if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
             setVideoPhase("background");
             watchingRollId.current = null;
           }
@@ -273,20 +322,45 @@ function ActivityApp() {
   const isClickable = videoPhase === "dice-ready" && !!myPendingRoll;
 
   return (
-    <div className="app-root" ref={appScope}>
+    <div className="app-root" ref={appScope} onMouseMove={handleMouseMove}>
       {/* Full-screen video background */}
       <div
         className={`video-stage${isClickable ? " video-stage--clickable" : ""}`}
         onClick={handleVideoClick}
       >
-        <video
-          ref={videoRef}
-          className="video-stage__video"
-          autoPlay
-          loop
-          muted
-          playsInline
-        />
+        {videoPhase === "background" ? (
+          <motion.div
+            className="bg-ambient"
+            animate={{ x: [0, 8, -5, 4, 0], y: [0, -6, 8, -4, 0] }}
+            transition={{
+              duration: 30,
+              repeat: Infinity,
+              ease: "easeInOut",
+              times: [0, 0.25, 0.5, 0.75, 1],
+            }}
+          >
+            <motion.div
+              className="bg-parallax"
+              style={{ x: bgX, y: bgY }}
+            >
+              <img
+                src="/img/temp_background.jpg"
+                className="bg-image"
+                alt=""
+                draggable={false}
+              />
+            </motion.div>
+          </motion.div>
+        ) : (
+          <video
+            ref={videoRef}
+            className="video-stage__video"
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        )}
 
         {/* Tap-to-reveal overlay — shown only to the roller */}
         <AnimatePresence>

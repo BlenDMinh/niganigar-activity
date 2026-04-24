@@ -255,12 +255,13 @@ const popupVariants = {
 };
 
 const FADE_MS = 700;
+const DEFAULT_VOLUME = 0.05;
 
 export function MusicPanel({ instanceId }: Props) {
   const [category, setCategory] = useState<CategoryKey>("tavern");
   const [songIndex, setSongIndex] = useState(0);
   const [sfxVolumes, setSfxVolumes] = useState<Record<string, number>>({});
-  const [musicVolume, setMusicVolume] = useState(0.4);
+  const [musicVolume, setMusicVolume] = useState(DEFAULT_VOLUME);
   const [openSfx, setOpenSfx] = useState<string | null>(null);
   const [showVol, setShowVol] = useState(false);
 
