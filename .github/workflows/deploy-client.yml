@@ -69,7 +69,7 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
-            --parameters '{"commands":["cd /app && docker compose pull && docker compose up -d --remove-orphans"]}' \
+            --parameters '{"commands":["cd /app && docker compose pull server client && docker compose up -d --no-deps --force-recreate server client"]}' \
             --query "Command.CommandId" \
             --output text)
           aws ssm wait command-executed \
