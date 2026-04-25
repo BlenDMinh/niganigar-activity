@@ -7,7 +7,10 @@ let socket: AppSocket | null = null;
 
 export function getSocket(): AppSocket {
   if (!socket) {
-    socket = io({ path: "/socket.io", autoConnect: true });
+    socket = io(import.meta.env.VITE_SERVER_URL as string, {
+      path: "/socket.io",
+      autoConnect: true,
+    });
   }
   return socket;
 }

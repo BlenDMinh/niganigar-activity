@@ -170,7 +170,7 @@ function ActivityApp() {
         });
         if (cancelled) return;
 
-        const res = await fetch("/api/discord-auth/token", {
+        const res = await fetch(`${import.meta.env.VITE_SERVER_URL}/api/discord-auth/token`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code }),
