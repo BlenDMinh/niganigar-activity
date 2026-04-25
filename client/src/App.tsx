@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { DiscordSDK } from "@discord/embedded-app-sdk";
+import { DiscordSDK, patchUrlMappings } from "@discord/embedded-app-sdk";
 import {
   AnimatePresence,
   motion,
@@ -162,7 +162,7 @@ function ActivityApp() {
         if (cancelled) return;
 
         const serverHost = (import.meta.env.VITE_SERVER_URL as string).replace(/^https?:\/\//, '');
-        discordSdk.patchUrlMappings([{ prefix: '/server', target: serverHost }]);
+        patchUrlMappings([{ prefix: '/server', target: serverHost }]);
 
         const { code } = await discordSdk.commands.authorize({
           client_id: import.meta.env.VITE_DISCORD_CLIENT_ID as string,
