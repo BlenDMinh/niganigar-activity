@@ -719,7 +719,7 @@
 
 .modal {
   width: 460px;
-  max-height: 72vh;
+  max-height: 72%;
   background: rgba(8, 8, 14, 0.96);
   border: 1px solid var(--border-2);
   border-radius: 12px;
@@ -1159,4 +1159,49 @@
   color: rgba(255, 255, 255, 0.45);
   text-align: center;
   line-height: 1.7;
+}
+
+/* ─── Responsive scaling for 2K / 4K viewports ──────────────────
+   Smoothly scales all HUD elements so the UI remains proportional
+   on high-resolution monitors.
+   Base design: 1920 px wide viewport → zoom 1×.
+   ────────────────────────────────────────────────────────────── */
+
+/* Discrete fallback for browsers without calc(length ÷ length) */
+@media (min-width: 2200px) {
+  .hud,
+  .tap-overlay,
+  .auth-screen {
+    zoom: 1.15;
+  }
+}
+@media (min-width: 2500px) {
+  .hud,
+  .tap-overlay,
+  .auth-screen {
+    zoom: 1.33;
+  }
+}
+@media (min-width: 3200px) {
+  .hud,
+  .tap-overlay,
+  .auth-screen {
+    zoom: 1.65;
+  }
+}
+@media (min-width: 3800px) {
+  .hud,
+  .tap-overlay,
+  .auth-screen {
+    zoom: 2;
+  }
+}
+
+/* Smooth override — fluid zoom proportional to viewport width.
+   Browsers that support CSS Values L4 (length ÷ length → number)
+   will use this; others fall back to the breakpoints above.       */
+.hud,
+.tap-overlay,
+.auth-screen {
+  zoom: clamp(1, calc(100vw / 1920px), 2.5);
 }
