@@ -161,6 +161,9 @@ function ActivityApp() {
         await discordSdk.ready();
         if (cancelled) return;
 
+        const serverHost = (import.meta.env.VITE_SERVER_URL as string).replace(/^https?:\/\//, '');
+        discordSdk.patchUrlMappings([{ prefix: '/server', target: serverHost }]);
+
         const { code } = await discordSdk.commands.authorize({
           client_id: import.meta.env.VITE_DISCORD_CLIENT_ID as string,
           response_type: "code",
