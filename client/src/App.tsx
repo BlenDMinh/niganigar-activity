@@ -113,7 +113,9 @@ function ActivityApp() {
     if (videoPhase !== "dice-ready" || !myPendingRoll || !instanceId) return;
 
     if (woodHitRef.current) {
-      (woodHitRef.current.cloneNode() as HTMLAudioElement).play().catch(() => {});
+      (woodHitRef.current.cloneNode() as HTMLAudioElement)
+        .play()
+        .catch(() => {});
     }
 
     setClickCount((prev) => {
@@ -130,7 +132,9 @@ function ActivityApp() {
 
       if (next >= 5) {
         if (diceRollRef.current) {
-          (diceRollRef.current.cloneNode() as HTMLAudioElement).play().catch(() => {});
+          (diceRollRef.current.cloneNode() as HTMLAudioElement)
+            .play()
+            .catch(() => {});
         }
         getSocket().emit("roll_reveal", {
           instanceId,
@@ -161,8 +165,11 @@ function ActivityApp() {
         await discordSdk.ready();
         if (cancelled) return;
 
-        const serverHost = (import.meta.env.VITE_SERVER_URL as string).replace(/^https?:\/\//, '');
-        patchUrlMappings([{ prefix: '/server', target: serverHost }]);
+        const serverHost = (import.meta.env.VITE_SERVER_URL as string).replace(
+          /^https?:\/\//,
+          "",
+        );
+        patchUrlMappings([{ prefix: "/server", target: serverHost }]);
 
         const { code } = await discordSdk.commands.authorize({
           client_id: import.meta.env.VITE_DISCORD_CLIENT_ID as string,
@@ -173,11 +180,14 @@ function ActivityApp() {
         });
         if (cancelled) return;
 
-        const res = await fetch(`${import.meta.env.VITE_SERVER_URL}/api/discord-auth/token`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code }),
-        });
+        const res = await fetch(
+          `${import.meta.env.VITE_SERVER_URL}/api/discord-auth/token`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          },
+        );
         if (cancelled) return;
 
         const { access_token } = (await res.json()) as { access_token: string };
@@ -342,10 +352,7 @@ function ActivityApp() {
               times: [0, 0.25, 0.5, 0.75, 1],
             }}
           >
-            <motion.div
-              className="bg-parallax"
-              style={{ x: bgX, y: bgY }}
-            >
+            <motion.div className="bg-parallax" style={{ x: bgX, y: bgY }}>
               <img
                 src="/img/temp_background.jpg"
                 className="bg-image"
