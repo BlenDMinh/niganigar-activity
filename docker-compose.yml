@@ -1,0 +1,24 @@
+services:
+  server:
+    image: ghcr.io/blendminh/niganigar-server:latest
+    environment:
+      PORT: "3001"
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      VITE_DISCORD_CLIENT_ID: ${VITE_DISCORD_CLIENT_ID}
+      CORS_ORIGIN: https://hopeful-sure-owl.ngrok-free.app
+    restart: unless-stopped
+
+  client:
+    image: ghcr.io/blendminh/niganigar-client:latest
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - client
+      - server
+    restart: unless-stopped
