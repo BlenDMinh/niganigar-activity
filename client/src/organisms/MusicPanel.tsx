@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getSocket } from "../socket/client";
+import { useStore } from "../state/store";
 import {
   CATEGORY_KEYS,
   CATEGORY_LABELS,
@@ -258,9 +259,10 @@ const FADE_MS = 700;
 const DEFAULT_VOLUME = 0.05;
 
 export function MusicPanel({ instanceId }: Props) {
-  const [category, setCategory] = useState<CategoryKey>("tavern");
-  const [songIndex, setSongIndex] = useState(0);
-  const [sfxVolumes, setSfxVolumes] = useState<Record<string, number>>({});
+  const { state, dispatch } = useStore();
+  const category = state.musicCategory as CategoryKey;
+  const songIndex = state.musicSongIndex;
+  const sfxVolumes = state.sfxVolumes;
   const [musicVolume, setMusicVolume] = useState(DEFAULT_VOLUME);
   const [openSfx, setOpenSfx] = useState<string | null>(null);
   const [showVol, setShowVol] = useState(false);
@@ -279,28 +281,6 @@ export function MusicPanel({ instanceId }: Props) {
 
   const sfxRefs = useRef<Record<string, HTMLAudioElement>>({});
   const sfxSrcsRef = useRef<Record<string, string>>({});
-
-  // ── socket sync ─────────────────────────────────────────────────
-  useEffect(() => {
-    const socket = getSocket();
-    socket.on("session_music", (p) => {
-      setCategory(p.category as CategoryKey);
-      setSongIndex(p.songIndex);
-      setSfxVolumes(p.sfxVolumes);
-    });
-    socket.on("music_sync", (p) => {
-      setCategory(p.category as CategoryKey);
-      setSongIndex(p.songIndex);
-    });
-    socket.on("sfx_sync", (p) =>
-      setSfxVolumes((prev) => ({ ...prev, [p.sfxId]: p.volume })),
-    );
-    return () => {
-      socket.off("session_music");
-      socket.off("music_sync");
-      socket.off("sfx_sync");
-    };
-  }, []);
 
   // ── music crossfade on category / song change ────────────────────
   useEffect(() => {
@@ -413,8 +393,7 @@ export function MusicPanel({ instanceId }: Props) {
       nextIndex = validIndices[Math.floor(Math.random() * validIndices.length)];
     }
 
-    setCategory(cat);
-    setSongIndex(nextIndex);
+    dispatch({ type: "MUSIC_SYNC", payload: { category: cat, songIndex: nextIndex } });
     getSocket().emit("music_change", {
       instanceId,
       category: cat,
@@ -423,7 +402,7 @@ export function MusicPanel({ instanceId }: Props) {
   }
 
   function handleSfxVolume(sfxId: string, volume: number) {
-    setSfxVolumes((prev) => ({ ...prev, [sfxId]: volume }));
+    dispatch({ type: "SFX_SYNC", payload: { sfxId, volume } });
     getSocket().emit("sfx_change", { instanceId, sfxId, volume });
   }
 

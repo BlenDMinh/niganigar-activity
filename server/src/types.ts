@@ -46,6 +46,16 @@ export interface ClientToServerEvents {
   }) => void;
   roll_reveal: (payload: { instanceId: string; rollId: string }) => void;
   roll_join: (payload: { instanceId: string; rollId: string }) => void;
+  music_change: (payload: {
+    instanceId: string;
+    category: string;
+    songIndex: number;
+  }) => void;
+  sfx_change: (payload: {
+    instanceId: string;
+    sfxId: string;
+    volume: number;
+  }) => void;
 }
 
 export interface ServerToClientEvents {
@@ -67,4 +77,11 @@ export interface ServerToClientEvents {
   roll_revealed: (payload: { entry: RollEntry; watcherIds: string[] }) => void;
   roll_cancelled: (payload: { rollId: string; userId: string }) => void;
   error: (payload: { message: string }) => void;
+  session_music: (payload: {
+    category: string;
+    songIndex: number;
+    sfxVolumes: Record<string, number>;
+  }) => void;
+  music_sync: (payload: { category: string; songIndex: number }) => void;
+  sfx_sync: (payload: { sfxId: string; volume: number }) => void;
 }

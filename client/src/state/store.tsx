@@ -21,6 +21,9 @@ export interface State {
   users: User[];
   rollHistory: RollEntry[];
   pendingRolls: Record<string, PendingRollInfo>;
+  musicCategory: string;
+  musicSongIndex: number;
+  sfxVolumes: Record<string, number>;
 }
 
 export type Action =
@@ -49,7 +52,20 @@ export type Action =
       type: "ROLL_REVEALED";
       payload: { entry: RollEntry; watcherIds: string[] };
     }
-  | { type: "ROLL_CANCELLED"; payload: { rollId: string; userId: string } };
+  | { type: "ROLL_CANCELLED"; payload: { rollId: string; userId: string } }
+  | {
+      type: "SESSION_MUSIC";
+      payload: {
+        category: string;
+        songIndex: number;
+        sfxVolumes: Record<string, number>;
+      };
+    }
+  | { type: "MUSIC_SYNC"; payload: { category: string; songIndex: number } }
+  | {
+      type: "SFX_SYNC";
+      payload: { sfxId: string; volume: number };
+    };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -107,6 +123,27 @@ function reducer(state: State, action: Action): State {
         pendingRolls: omit(state.pendingRolls, action.payload.rollId),
       };
     }
+    case "SESSION_MUSIC":
+      return {
+        ...state,
+        musicCategory: action.payload.category,
+        musicSongIndex: action.payload.songIndex,
+        sfxVolumes: action.payload.sfxVolumes,
+      };
+    case "MUSIC_SYNC":
+      return {
+        ...state,
+        musicCategory: action.payload.category,
+        musicSongIndex: action.payload.songIndex,
+      };
+    case "SFX_SYNC":
+      return {
+        ...state,
+        sfxVolumes: {
+          ...state.sfxVolumes,
+          [action.payload.sfxId]: action.payload.volume,
+        },
+      };
     default:
       return state;
   }
@@ -119,6 +156,9 @@ const initialState: State = {
   users: [],
   rollHistory: [],
   pendingRolls: {},
+  musicCategory: "tavern",
+  musicSongIndex: 0,
+  sfxVolumes: {},
 };
 
 interface StoreContextValue {
