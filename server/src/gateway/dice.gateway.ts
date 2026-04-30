@@ -101,6 +101,11 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     socket.emit('session_users', { users: Array.from(session.users.values()) });
     socket.emit('roll_history', { entries: session.rollHistory });
+    socket.emit('session_music', {
+      category: session.musicCategory,
+      songIndex: session.musicSongIndex,
+      sfxVolumes: session.sfxVolumes,
+    });
     // Broadcast to the full room — the joining socket is now included,
     // so they see themselves too (the store deduplicates by userId).
     this.server.to(payload.instanceId).emit('user_joined', { user });
@@ -251,5 +256,48 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .to(payload.instanceId)
         .emit('roll_revealed', { entry, watcherIds });
     }
+  }
+
+  @SubscribeMessage('music_change')
+  handleMusicChange(
+    @MessageBody()
+    payload: { instanceId: string; category: string; songIndex: number },
+    @ConnectedSocket() socket: TypedSocket,
+  ) {
+    const session = this.sessionStore.get(payload.instanceId);
+    if (!session) return;
+
+    session.musicCategory = payload.category;
+    session.musicSongIndex = payload.songIndex;
+
+    this.logger.log(
+      `music_change: category=${payload.category} songIndex=${payload.songIndex} in ${payload.instanceId}`,
+    );
+
+    socket.to(payload.instanceId).emit('music_sync', {
+      category: payload.category,
+      songIndex: payload.songIndex,
+    });
+  }
+
+  @SubscribeMessage('sfx_change')
+  handleSfxChange(
+    @MessageBody()
+    payload: { instanceId: string; sfxId: string; volume: number },
+    @ConnectedSocket() socket: TypedSocket,
+  ) {
+    const session = this.sessionStore.get(payload.instanceId);
+    if (!session) return;
+
+    session.sfxVolumes[payload.sfxId] = payload.volume;
+
+    this.logger.log(
+      `sfx_change: sfxId=${payload.sfxId} volume=${payload.volume} in ${payload.instanceId}`,
+    );
+
+    socket.to(payload.instanceId).emit('sfx_sync', {
+      sfxId: payload.sfxId,
+      volume: payload.volume,
+    });
   }
 }

@@ -7,6 +7,9 @@ export interface Session {
   users: Map<string, User>;
   rollHistory: RollEntry[];
   pendingRolls: Map<string, PendingRoll>;
+  musicCategory: string;
+  musicSongIndex: number;
+  sfxVolumes: Record<string, number>;
 }
 
 @Injectable()
@@ -21,6 +24,9 @@ export class SessionStoreService {
         users: new Map(),
         rollHistory: [],
         pendingRolls: new Map(),
+        musicCategory: 'tavern',
+        musicSongIndex: 0,
+        sfxVolumes: {},
       });
     }
     return this.sessions.get(instanceId)!;
