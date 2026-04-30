@@ -267,6 +267,11 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const session = this.sessionStore.get(payload.instanceId);
     if (!session) return;
 
+    const user = Array.from(session.users.values()).find(
+      (u) => u.socketId === socket.id,
+    );
+    if (!user) return;
+
     session.musicCategory = payload.category;
     session.musicSongIndex = payload.songIndex;
 
@@ -288,6 +293,11 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     const session = this.sessionStore.get(payload.instanceId);
     if (!session) return;
+
+    const user = Array.from(session.users.values()).find(
+      (u) => u.socketId === socket.id,
+    );
+    if (!user) return;
 
     session.sfxVolumes[payload.sfxId] = payload.volume;
 
