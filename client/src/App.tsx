@@ -277,6 +277,16 @@ function ActivityApp() {
           setClickCount(0);
         });
 
+        socket.on("session_music", (payload) =>
+          dispatch({ type: "SESSION_MUSIC", payload }),
+        );
+        socket.on("music_sync", (payload) =>
+          dispatch({ type: "MUSIC_SYNC", payload }),
+        );
+        socket.on("sfx_sync", (payload) =>
+          dispatch({ type: "SFX_SYNC", payload }),
+        );
+
         socket.emit("join", {
           instanceId: iid,
           channelId: cid,
