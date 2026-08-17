@@ -72,6 +72,13 @@ const FORMAT_SELECTOR =
 // ever starting a real download.
 const MAX_PROBE_ATTEMPTS = 3;
 
+// The same per-request volatility can *also* hit the actual download
+// step even after probe succeeded (confirmed live: probe resolves a
+// format fine, then the separate download invocation 403s). Retried the
+// same way, gated on whether any real data ever started flowing — see
+// attemptDownload().
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
 // youtubei.js (pure npm) can no longer fetch playable stream URLs for most
 // videos without solving YouTube's PO-token anti-bot challenge, which in
 // practice requires a headless browser. yt-dlp ships its own actively
@@ -101,48 +108,88 @@ export class YoutubeAudioService implements OnModuleInit {
     );
     const mimeType = MIME_BY_EXT[ext] ?? 'audio/webm';
 
-    const child = spawn(
-      'yt-dlp',
-      [
-        '-f',
-        FORMAT_SELECTOR,
-        '--no-playlist',
-        '--no-warnings',
-        ...REMOTE_COMPONENTS_ARGS,
-        ...this.cookieArgs(),
-        '-o',
-        '-',
-        url,
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+      try {
+        const { stream, exitCode } = await this.attemptDownload(url, videoId);
+        return { stream, mimeType, durationSeconds, estimatedBytes, exitCode };
+      } catch (e) {
+        lastError = e;
+        this.logger.warn(
+          `download attempt ${attempt}/${MAX_DOWNLOAD_ATTEMPTS} failed for ${videoId} before any data arrived: ${(e as Error).message.slice(0, 200)}`,
+        );
+      }
+    }
+    throw lastError;
+  }
 
-    let stderr = '';
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    const exitCode = new Promise<number | null>((resolveCode) => {
-      child.on('close', (code) => {
-        if (code !== 0) {
-          this.logger.error(
-            `yt-dlp exited ${code} for ${videoId}: ${stderr.slice(0, 500)}`,
-          );
-        }
-        resolveCode(code);
+  // Spawns yt-dlp and waits for either real data to start flowing (commits
+  // to this attempt and resolves immediately, so the caller can start
+  // piping/streaming right away) or the process closing before any data
+  // ever arrived (rejects, safe to retry since nothing was handed to a
+  // consumer yet — uses the paused-mode 'readable' event specifically so
+  // checking for data never consumes/loses the bytes a real .pipe()
+  // consumer needs afterward). A failure *after* data has already
+  // started flowing can't be silently retried this way; MusicCacheService
+  // still catches that downstream via the returned `exitCode`.
+  private attemptDownload(
+    url: string,
+    videoId: string,
+  ): Promise<{ stream: Readable; exitCode: Promise<number | null> }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        'yt-dlp',
+        [
+          '-f',
+          FORMAT_SELECTOR,
+          '--no-playlist',
+          '--no-warnings',
+          ...REMOTE_COMPONENTS_ARGS,
+          ...this.cookieArgs(),
+          '-o',
+          '-',
+          url,
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+
+      let stderr = '';
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      if (!child.stdout) {
+        reject(new Error(`yt-dlp produced no stdout stream for ${videoId}`));
+        return;
+      }
+      const stdout = child.stdout;
+
+      let committed = false;
+      const exitCode = new Promise<number | null>((resolveCode) => {
+        child.on('close', (code) => {
+          if (code !== 0) {
+            this.logger.error(
+              `yt-dlp exited ${code} for ${videoId}: ${stderr.slice(0, 500)}`,
+            );
+          }
+          if (!committed) {
+            reject(
+              new Error(
+                `yt-dlp closed (code ${code}) before producing any data for ${videoId}: ${stderr.slice(0, 500)}`,
+              ),
+            );
+            return;
+          }
+          resolveCode(code);
+        });
+      });
+
+      stdout.once('readable', () => {
+        if (committed) return;
+        committed = true;
+        resolve({ stream: stdout, exitCode });
       });
     });
-
-    if (!child.stdout) {
-      throw new Error(`yt-dlp produced no stdout stream for ${videoId}`);
-    }
-
-    return {
-      stream: child.stdout,
-      mimeType,
-      durationSeconds,
-      estimatedBytes,
-      exitCode,
-    };
   }
 
   private async probeWithRetry(
