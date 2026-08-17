@@ -18,7 +18,13 @@ WORKDIR /app
 # and yt-dlp's standalone PyInstaller binaries target glibc. Left unpinned
 # on purpose: yt-dlp needs frequent updates to keep up with YouTube's
 # anti-bot changes, so rebuild the image periodically to pick up fixes.
-RUN apk add --no-cache python3 py3-pip ffmpeg && \
+#
+# deno + yt-dlp-ejs-rt-deno: YouTube protects real stream URLs behind an
+# obfuscated-JS signature/"n challenge" that yt-dlp must execute to
+# decipher. Without a JS runtime for this, yt-dlp silently falls back to
+# only offering formats that don't need deciphering (storyboard
+# thumbnails), even with valid auth — no error, just near-empty results.
+RUN apk add --no-cache python3 py3-pip ffmpeg deno yt-dlp-ejs-rt-deno && \
     pip3 install --no-cache-dir --break-system-packages yt-dlp
 
 COPY --from=builder /app/package*.json ./

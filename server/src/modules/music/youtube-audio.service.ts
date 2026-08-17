@@ -29,6 +29,15 @@ const MIME_BY_EXT: Record<string, string> = {
 // long"), so a file mount is the only robust option here.
 const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
 
+// YouTube protects real stream URLs behind an obfuscated-JS signature/"n
+// challenge" that yt-dlp must execute to decipher. Having a JS runtime
+// (deno, installed in the image) isn't enough on its own — yt-dlp also
+// needs the actual solver script, and won't auto-download that without
+// this flag (by design, since it means fetching and running remote code).
+// Confirmed via direct testing: without this, every video silently falls
+// back to storyboard-only "formats" with no visible error.
+const REMOTE_COMPONENTS_ARGS = ['--remote-components', 'ejs:github'];
+
 // youtubei.js (pure npm) can no longer fetch playable stream URLs for most
 // videos without solving YouTube's PO-token anti-bot challenge, which in
 // practice requires a headless browser. yt-dlp ships its own actively
@@ -62,6 +71,7 @@ export class YoutubeAudioService implements OnModuleInit {
         'bestaudio/best',
         '--no-playlist',
         '--no-warnings',
+        ...REMOTE_COMPONENTS_ARGS,
         ...this.cookieArgs(),
         '-o',
         '-',
@@ -99,6 +109,7 @@ export class YoutubeAudioService implements OnModuleInit {
         '--no-playlist',
         '--skip-download',
         '--no-warnings',
+        ...REMOTE_COMPONENTS_ARGS,
         ...this.cookieArgs(),
         '--print',
         '%(duration)s\t%(ext)s',
@@ -140,6 +151,7 @@ export class YoutubeAudioService implements OnModuleInit {
       const child = spawn('yt-dlp', [
         '--list-formats',
         '--no-warnings',
+        ...REMOTE_COMPONENTS_ARGS,
         ...this.cookieArgs(),
         url,
       ]);
