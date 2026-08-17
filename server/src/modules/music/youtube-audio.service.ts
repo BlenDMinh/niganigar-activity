@@ -116,6 +116,7 @@ export class YoutubeAudioService implements OnModuleInit {
       child.on('error', reject);
       child.on('close', (code) => {
         if (code !== 0) {
+          void this.logAvailableFormats(url);
           reject(
             new Error(`yt-dlp probe failed (${code}): ${stderr.slice(0, 500)}`),
           );
@@ -128,6 +129,34 @@ export class YoutubeAudioService implements OnModuleInit {
           ext: ext || 'webm',
         });
       });
+    });
+  }
+
+  // Fire-and-forget diagnostic dump for when format selection fails — logs
+  // what yt-dlp actually sees (from this exact machine, with these exact
+  // cookies) instead of leaving us guessing from a different environment.
+  private logAvailableFormats(url: string): Promise<void> {
+    return new Promise((resolveDone) => {
+      const child = spawn('yt-dlp', [
+        '--list-formats',
+        '--no-warnings',
+        ...this.cookieArgs(),
+        url,
+      ]);
+      let out = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        out += chunk.toString();
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        out += chunk.toString();
+      });
+      child.on('close', () => {
+        this.logger.error(
+          `Available formats for ${url}:\n${out.slice(0, 3000)}`,
+        );
+        resolveDone();
+      });
+      child.on('error', () => resolveDone());
     });
   }
 }
