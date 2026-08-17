@@ -375,7 +375,9 @@ export function MusicPanel({ instanceId }: Props) {
       inAudio.src = src;
       inAudio.loop = true;
       inAudio.volume = musicVolumeRef.current;
-      void inAudio.play().catch(() => {});
+      void inAudio
+        .play()
+        .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
       seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
       return;
     }
@@ -387,7 +389,9 @@ export function MusicPanel({ instanceId }: Props) {
     inAudio.src = src;
     inAudio.loop = true;
     inAudio.volume = 0;
-    void inAudio.play().catch(() => {});
+    void inAudio
+      .play()
+      .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
     seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
     cancelFades.current.push(fadeIn(inAudio, musicVolumeRef.current, FADE_MS));
 
@@ -429,6 +433,33 @@ export function MusicPanel({ instanceId }: Props) {
     return () => {
       audioA.current.pause();
       audioB.current.pause();
+    };
+  }, []);
+
+  // ── unlock audio on the first real user gesture ──────────────────
+  // Browsers block audio-with-sound from autoplaying until the page has
+  // had a genuine click/tap/keypress, so a play() attempt made right when
+  // the join sync arrives can fail silently (the calls above swallow the
+  // rejection). Retry once inside the first gesture, which satisfies the
+  // browser's autoplay policy.
+  useEffect(() => {
+    function unlock() {
+      const active =
+        activeSlot.current === "a" ? audioA.current : audioB.current;
+      if (active.src && active.paused) void active.play().catch(() => {});
+      Object.values(sfxRefs.current).forEach((audio) => {
+        if (audio.src && audio.volume > 0 && audio.paused) {
+          void audio.play().catch(() => {});
+        }
+      });
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    }
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
     };
   }, []);
 
