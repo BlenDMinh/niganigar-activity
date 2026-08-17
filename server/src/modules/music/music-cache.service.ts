@@ -55,7 +55,9 @@ export class MusicCacheService implements OnModuleInit {
   }
 
   isDownloading(videoId: string): boolean {
-    return this.inflight.has(videoId);
+    const result = this.inflight.has(videoId);
+    this.logger.log(`isDownloading(${videoId}) = ${result}`);
+    return result;
   }
 
   async readCached(videoId: string): Promise<CachedTrack | null> {
@@ -64,11 +66,20 @@ export class MusicCacheService implements OnModuleInit {
 
   async getOrFetch(videoId: string): Promise<CachedTrack> {
     const cached = await this.readFromDisk(videoId);
-    if (cached) return cached;
+    if (cached) {
+      this.logger.log(`getOrFetch(${videoId}): disk cache hit`);
+      return cached;
+    }
 
     const pending = this.inflight.get(videoId);
-    if (pending) return pending;
+    if (pending) {
+      this.logger.log(
+        `getOrFetch(${videoId}): joining existing in-flight task`,
+      );
+      return pending;
+    }
 
+    this.logger.log(`getOrFetch(${videoId}): starting new download()`);
     const task = this.download(videoId).finally(() =>
       this.inflight.delete(videoId),
     );
@@ -85,6 +96,9 @@ export class MusicCacheService implements OnModuleInit {
   async streamLive(videoId: string): Promise<LiveStream> {
     this.logger.log(`Downloading audio for ${videoId}…`);
     const audio = await this.youtubeAudio.fetchAudio(videoId);
+    this.logger.log(
+      `${videoId}: fetchAudio() resolved (mimeType=${audio.mimeType}, durationSeconds=${audio.durationSeconds ?? '(unknown)'}, estimatedBytes=${audio.estimatedBytes ?? '(unknown)'})`,
+    );
     const ext = EXT_BY_MIME[audio.mimeType] ?? 'webm';
     const filePath = join(CACHE_DIR, `${videoId}.${ext}`);
 
@@ -93,11 +107,19 @@ export class MusicCacheService implements OnModuleInit {
     audio.stream.pipe(fileStream);
     audio.stream.pipe(responseStream);
 
+    let bytesSeen = 0;
+    audio.stream.on('data', (chunk: Buffer) => {
+      bytesSeen += chunk.length;
+    });
+
     const task = new Promise<CachedTrack>((resolve, reject) => {
       let settled = false;
       const fail = (err: Error) => {
         if (settled) return;
         settled = true;
+        this.logger.error(
+          `${videoId}: streamLive failed after ${bytesSeen} bytes: ${err.message}`,
+        );
         fileStream.destroy();
         responseStream.destroy(err);
         void rm(filePath, { force: true });
@@ -113,7 +135,9 @@ export class MusicCacheService implements OnModuleInit {
         };
         writeFile(join(CACHE_DIR, `${videoId}.json`), JSON.stringify(meta))
           .then(() => {
-            this.logger.log(`Cached audio for ${videoId} → ${filePath}`);
+            this.logger.log(
+              `Cached audio for ${videoId} → ${filePath} (${bytesSeen} bytes)`,
+            );
             resolve({
               filePath,
               mimeType: audio.mimeType,
@@ -123,8 +147,14 @@ export class MusicCacheService implements OnModuleInit {
           .catch(fail);
       };
 
-      audio.stream.on('error', fail);
-      fileStream.on('error', fail);
+      audio.stream.on('error', (err: Error) => {
+        this.logger.error(`${videoId}: audio.stream errored: ${err.message}`);
+        fail(err);
+      });
+      fileStream.on('error', (err: Error) => {
+        this.logger.error(`${videoId}: fileStream errored: ${err.message}`);
+        fail(err);
+      });
       // A failed yt-dlp process still ends its stdout "cleanly" as far as
       // the pipe is concerned — fileStream.finish() fires the same way it
       // would for a real success (Node fires stdout's 'end' before the
@@ -132,7 +162,11 @@ export class MusicCacheService implements OnModuleInit {
       // errors alone). Only trust it once we've also confirmed the
       // process actually exited 0.
       fileStream.on('finish', () => {
+        this.logger.log(
+          `${videoId}: fileStream finished (${bytesSeen} bytes written), awaiting exit code`,
+        );
         void audio.exitCode.then((code) => {
+          this.logger.log(`${videoId}: yt-dlp exit code = ${code}`);
           if (code !== 0) {
             fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
             return;
@@ -164,6 +198,9 @@ export class MusicCacheService implements OnModuleInit {
   async touchCustom(videoId: string): Promise<void> {
     this.customLru = this.customLru.filter((id) => id !== videoId);
     this.customLru.push(videoId);
+    this.logger.log(
+      `touchCustom(${videoId}): LRU now [${this.customLru.join(', ')}]`,
+    );
 
     while (this.customLru.length > MAX_CUSTOM_CACHED) {
       const evictId = this.customLru.shift();
@@ -205,18 +242,30 @@ export class MusicCacheService implements OnModuleInit {
 
   private async readFromDisk(videoId: string): Promise<CachedTrack | null> {
     const metaPath = join(CACHE_DIR, `${videoId}.json`);
-    if (!existsSync(metaPath)) return null;
+    if (!existsSync(metaPath)) {
+      this.logger.log(`readFromDisk(${videoId}): no meta file at ${metaPath}`);
+      return null;
+    }
 
     try {
       const meta = JSON.parse(await readFile(metaPath, 'utf8')) as CacheMeta;
       const filePath = join(CACHE_DIR, `${videoId}.${meta.ext}`);
-      if (!existsSync(filePath)) return null;
+      if (!existsSync(filePath)) {
+        this.logger.log(
+          `readFromDisk(${videoId}): meta exists but audio file missing at ${filePath}`,
+        );
+        return null;
+      }
+      this.logger.log(`readFromDisk(${videoId}): hit at ${filePath}`);
       return {
         filePath,
         mimeType: meta.mimeType,
         durationSeconds: meta.durationSeconds,
       };
-    } catch {
+    } catch (e) {
+      this.logger.warn(
+        `readFromDisk(${videoId}): failed to parse meta at ${metaPath}: ${String(e)}`,
+      );
       return null;
     }
   }
@@ -224,16 +273,26 @@ export class MusicCacheService implements OnModuleInit {
   private async download(videoId: string): Promise<CachedTrack> {
     this.logger.log(`Downloading audio for ${videoId}…`);
     const audio = await this.youtubeAudio.fetchAudio(videoId);
+    this.logger.log(
+      `${videoId}: fetchAudio() resolved (mimeType=${audio.mimeType}, durationSeconds=${audio.durationSeconds ?? '(unknown)'})`,
+    );
     const ext = EXT_BY_MIME[audio.mimeType] ?? 'webm';
     const filePath = join(CACHE_DIR, `${videoId}.${ext}`);
 
+    let bytesSeen = 0;
     await new Promise<void>((resolve, reject) => {
       const fileStream = createWriteStream(filePath);
       audio.stream.pipe(fileStream);
+      audio.stream.on('data', (chunk: Buffer) => {
+        bytesSeen += chunk.length;
+      });
       let settled = false;
       const fail = (err: Error) => {
         if (settled) return;
         settled = true;
+        this.logger.error(
+          `${videoId}: download() failed after ${bytesSeen} bytes: ${err.message}`,
+        );
         fileStream.destroy();
         void rm(filePath, { force: true });
         reject(err);
@@ -243,7 +302,11 @@ export class MusicCacheService implements OnModuleInit {
       // See streamLive()'s identical comment — fileStream.finish() alone
       // doesn't mean the download actually succeeded.
       fileStream.on('finish', () => {
+        this.logger.log(
+          `${videoId}: fileStream finished (${bytesSeen} bytes written), awaiting exit code`,
+        );
         void audio.exitCode.then((code) => {
+          this.logger.log(`${videoId}: yt-dlp exit code = ${code}`);
           if (code !== 0) {
             fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
             return;
@@ -262,7 +325,9 @@ export class MusicCacheService implements OnModuleInit {
     };
     await writeFile(join(CACHE_DIR, `${videoId}.json`), JSON.stringify(meta));
 
-    this.logger.log(`Cached audio for ${videoId} → ${filePath}`);
+    this.logger.log(
+      `Cached audio for ${videoId} → ${filePath} (${bytesSeen} bytes)`,
+    );
     return {
       filePath,
       mimeType: audio.mimeType,

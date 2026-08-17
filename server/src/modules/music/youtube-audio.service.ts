@@ -114,17 +114,27 @@ export class YoutubeAudioService implements OnModuleInit {
   }
 
   async fetchAudio(videoId: string): Promise<ResolvedAudio> {
+    this.logger.log(`fetchAudio(${videoId}): starting probe`);
     const url = `https://www.youtube.com/watch?v=${videoId}`;
     const { durationSeconds, ext, estimatedBytes } = await this.probeWithRetry(
       url,
       videoId,
     );
+    this.logger.log(
+      `fetchAudio(${videoId}): probe succeeded (ext=${ext}, durationSeconds=${durationSeconds ?? '(unknown)'}, estimatedBytes=${estimatedBytes ?? '(unknown)'})`,
+    );
     const mimeType = MIME_BY_EXT[ext] ?? 'audio/webm';
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+      this.logger.log(
+        `fetchAudio(${videoId}): download attempt ${attempt}/${MAX_DOWNLOAD_ATTEMPTS}`,
+      );
       try {
         const { stream, exitCode } = await this.attemptDownload(url, videoId);
+        this.logger.log(
+          `fetchAudio(${videoId}): attempt ${attempt} committed (data started flowing)`,
+        );
         return { stream, mimeType, durationSeconds, estimatedBytes, exitCode };
       } catch (e) {
         lastError = e;
@@ -133,6 +143,9 @@ export class YoutubeAudioService implements OnModuleInit {
         );
       }
     }
+    this.logger.error(
+      `fetchAudio(${videoId}): all ${MAX_DOWNLOAD_ATTEMPTS} download attempts failed`,
+    );
     throw lastError;
   }
 
@@ -149,6 +162,7 @@ export class YoutubeAudioService implements OnModuleInit {
     url: string,
     videoId: string,
   ): Promise<{ stream: Readable; exitCode: Promise<number | null> }> {
+    this.logger.log(`attemptDownload(${videoId}): spawning yt-dlp`);
     return new Promise((resolve, reject) => {
       const child = spawn(
         'yt-dlp',
@@ -216,6 +230,9 @@ export class YoutubeAudioService implements OnModuleInit {
   }> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_PROBE_ATTEMPTS; attempt++) {
+      this.logger.log(
+        `probeWithRetry(${videoId}): attempt ${attempt}/${MAX_PROBE_ATTEMPTS}`,
+      );
       try {
         return await this.probe(url);
       } catch (e) {
