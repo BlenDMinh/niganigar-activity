@@ -17,6 +17,8 @@ import { ClientToServerEvents, ServerToClientEvents, User } from '../types';
 type TypedServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
+const VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
+
 @WebSocketGateway({ cors: { origin: '*' } })
 export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -104,6 +106,9 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     socket.emit('session_music', {
       category: session.musicCategory,
       songIndex: session.musicSongIndex,
+      customYoutubeId: session.customYoutubeId,
+      customOffsetSeconds: session.customOffsetSeconds,
+      startedAt: session.musicStartedAt,
       sfxVolumes: session.sfxVolumes,
     });
     // Broadcast to the full room — the joining socket is now included,
@@ -274,6 +279,10 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     session.musicCategory = payload.category;
     session.musicSongIndex = payload.songIndex;
+    // Picking a catalog category always exits custom-link playback.
+    session.customYoutubeId = null;
+    session.customOffsetSeconds = 0;
+    session.musicStartedAt = Date.now();
 
     this.logger.log(
       `music_change: category=${payload.category} songIndex=${payload.songIndex} in ${payload.instanceId}`,
@@ -282,6 +291,48 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     socket.to(payload.instanceId).emit('music_sync', {
       category: payload.category,
       songIndex: payload.songIndex,
+      customYoutubeId: null,
+      customOffsetSeconds: 0,
+      startedAt: session.musicStartedAt,
+    });
+  }
+
+  @SubscribeMessage('music_change_custom')
+  handleMusicChangeCustom(
+    @MessageBody()
+    payload: { instanceId: string; youtubeId: string; offsetSeconds: number },
+    @ConnectedSocket() socket: TypedSocket,
+  ) {
+    const session = this.sessionStore.get(payload.instanceId);
+    if (!session) return;
+
+    const user = Array.from(session.users.values()).find(
+      (u) => u.socketId === socket.id,
+    );
+    if (!user) return;
+
+    if (!VIDEO_ID_RE.test(payload.youtubeId)) {
+      this.logger.warn(
+        `music_change_custom: invalid video id "${payload.youtubeId}"`,
+      );
+      socket.emit('error', { message: 'Invalid YouTube video id' });
+      return;
+    }
+
+    session.customYoutubeId = payload.youtubeId;
+    session.customOffsetSeconds = Math.max(0, payload.offsetSeconds || 0);
+    session.musicStartedAt = Date.now();
+
+    this.logger.log(
+      `music_change_custom: ${user.username} played ${payload.youtubeId} (offset=${session.customOffsetSeconds}s) in ${payload.instanceId}`,
+    );
+
+    socket.to(payload.instanceId).emit('music_sync', {
+      category: session.musicCategory,
+      songIndex: session.musicSongIndex,
+      customYoutubeId: session.customYoutubeId,
+      customOffsetSeconds: session.customOffsetSeconds,
+      startedAt: session.musicStartedAt,
     });
   }
 

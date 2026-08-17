@@ -39,6 +39,11 @@ export interface ClientToServerEvents {
     category: string;
     songIndex: number;
   }) => void;
+  music_change_custom: (payload: {
+    instanceId: string;
+    youtubeId: string;
+    offsetSeconds: number;
+  }) => void;
   sfx_change: (payload: {
     instanceId: string;
     sfxId: string;
@@ -68,8 +73,17 @@ export interface ServerToClientEvents {
   session_music: (payload: {
     category: string;
     songIndex: number;
+    customYoutubeId: string | null;
+    customOffsetSeconds: number;
+    startedAt: number;
     sfxVolumes: Record<string, number>;
   }) => void;
-  music_sync: (payload: { category: string; songIndex: number }) => void;
+  music_sync: (payload: {
+    category: string;
+    songIndex: number;
+    customYoutubeId: string | null;
+    customOffsetSeconds: number;
+    startedAt: number;
+  }) => void;
   sfx_sync: (payload: { sfxId: string; volume: number }) => void;
 }

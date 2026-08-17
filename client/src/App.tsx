@@ -108,7 +108,7 @@ function ActivityApp() {
     return () => video.removeEventListener("ended", freeze);
   }, [videoPhase]);
 
-  // 5-tap reveal mechanic with escalating page shake on each tap
+  // 3-tap reveal mechanic with escalating page shake on each tap
   const handleVideoClick = useCallback(() => {
     if (videoPhase !== "dice-ready" || !myPendingRoll || !instanceId) return;
 
@@ -120,7 +120,7 @@ function ActivityApp() {
 
     setClickCount((prev) => {
       const next = prev + 1;
-      // Shake intensity scales with tap number (4, 6.5, 9, 11.5, 16 px)
+      // Shake intensity scales with tap number (6.5, 9, 11.5 px)
       const amp = 4 + next * 2.5;
       void animateApp(
         appScope.current,
@@ -130,7 +130,7 @@ function ActivityApp() {
         { duration: 0.38, ease: [0.36, 0.07, 0.19, 0.97] },
       );
 
-      if (next >= 5) {
+      if (next >= 3) {
         if (diceRollRef.current) {
           (diceRollRef.current.cloneNode() as HTMLAudioElement)
             .play()
@@ -228,6 +228,14 @@ function ActivityApp() {
 
         socket.on("roll_started", (payload) => {
           dispatch({ type: "ROLL_STARTED", payload });
+          // A new roll starting means any grace-period timer left over from
+          // this client's previous reveal is stale — if left alone it fires
+          // later and forces videoPhase back to "background" mid-roll,
+          // stranding the tap-to-reveal overlay for this new roll.
+          if (revealTimerRef.current) {
+            clearTimeout(revealTimerRef.current);
+            revealTimerRef.current = null;
+          }
           if (payload.userId === auth.user.id) {
             // Current user is the roller — immediately watch
             watchingRollId.current = payload.rollId;
@@ -394,7 +402,7 @@ function ActivityApp() {
             >
               <p className="tap-overlay__hint">Tap to reveal</p>
               <div className="tap-overlay__dots">
-                {Array.from({ length: 5 }).map((_, i) => (
+                {Array.from({ length: 3 }).map((_, i) => (
                   <TapIndicator key={i} filled={i < clickCount} />
                 ))}
               </div>

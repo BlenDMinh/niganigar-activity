@@ -9,6 +9,16 @@ export interface Session {
   pendingRolls: Map<string, PendingRoll>;
   musicCategory: string;
   musicSongIndex: number;
+  // Set when someone plays a pasted YouTube link instead of a catalog
+  // track. Takes precedence over musicCategory/musicSongIndex for
+  // playback while set; cleared when a catalog category is picked again.
+  customYoutubeId: string | null;
+  // Start-time offset (seconds) parsed from the custom link's t=/start=
+  // param, if any.
+  customOffsetSeconds: number;
+  // Server epoch ms when the current track started — clients derive their
+  // playback position from this so everyone stays in sync.
+  musicStartedAt: number;
   sfxVolumes: Record<string, number>;
 }
 
@@ -26,6 +36,9 @@ export class SessionStoreService {
         pendingRolls: new Map(),
         musicCategory: 'tavern',
         musicSongIndex: 0,
+        customYoutubeId: null,
+        customOffsetSeconds: 0,
+        musicStartedAt: Date.now(),
         sfxVolumes: {},
       });
     }
