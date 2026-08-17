@@ -1154,8 +1154,13 @@
   font-style: italic;
 }
 
-/* Download progress bar — shown in place of "Now Playing" while a fresh
-   (not-yet-cached) track is being fetched */
+/* Row 4 — download progress. Its own row below "Now Playing" (never
+   displaces the title) while a fresh, not-yet-cached track is fetching. */
+.music-panel__download {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
 .download-bar {
   width: 100%;
   height: 5px;

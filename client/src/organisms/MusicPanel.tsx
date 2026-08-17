@@ -284,9 +284,10 @@ function audioUrl(youtubeId: string, isCustom: boolean): string {
 async function fetchAudioBlobUrl(
   youtubeId: string,
   isCustom: boolean,
+  signal: AbortSignal,
   onProgress: (receivedBytes: number, estimatedBytes: number | null) => void,
 ): Promise<string> {
-  const res = await fetch(audioUrl(youtubeId, isCustom));
+  const res = await fetch(audioUrl(youtubeId, isCustom), { signal });
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`);
 
   const estimatedHeader = res.headers.get("X-Estimated-Bytes");
@@ -420,29 +421,35 @@ export function MusicPanel({ instanceId }: Props) {
     // Keep activeSlot in sync for the volume-slider effect.
     activeSlot.current = inAudio === elA ? "a" : "b";
 
-    let cancelled = false;
+    // A rapid switch used to just *ignore* the previous fetch's eventual
+    // result while leaving the actual network request/stream-read running
+    // to completion in the background — wasteful, and the source of the
+    // rapid-switching glitches (a stale request could still be the one
+    // that ends up "winning" a race against a newer switch depending on
+    // timing). Abort it for real instead.
+    const controller = new AbortController();
     const isCustom = !!customYoutubeId;
 
     // Only show "Downloading…" if the fetch is actually slow — an
     // already-cached track resolves in a handful of ms and should never
     // flash a progress bar.
     const showProgressTimer = window.setTimeout(() => {
-      if (!cancelled) setDownloadProgress((p) => p ?? -1);
+      if (!controller.signal.aborted) setDownloadProgress((p) => p ?? -1);
     }, 300);
 
-    void fetchAudioBlobUrl(activeYoutubeId, isCustom, (received, estimated) => {
-      if (cancelled) return;
-      setDownloadProgress(
-        estimated ? Math.min(99, (received / estimated) * 100) : -1,
-      );
-    })
+    void fetchAudioBlobUrl(
+      activeYoutubeId,
+      isCustom,
+      controller.signal,
+      (received, estimated) => {
+        setDownloadProgress(
+          estimated ? Math.min(99, (received / estimated) * 100) : -1,
+        );
+      },
+    )
       .then((blobUrl) => {
         clearTimeout(showProgressTimer);
         setDownloadProgress(null);
-        if (cancelled) {
-          URL.revokeObjectURL(blobUrl);
-          return;
-        }
         revokeIfBlobUrl(inAudio.src);
 
         if (outAudio === null) {
@@ -475,11 +482,15 @@ export function MusicPanel({ instanceId }: Props) {
       .catch((e) => {
         clearTimeout(showProgressTimer);
         setDownloadProgress(null);
-        console.warn("[MusicPanel] failed to load audio:", e);
+        // A superseded-by-a-newer-switch abort is expected, not a real
+        // failure — only warn on genuine fetch/network errors.
+        if ((e as { name?: string })?.name !== "AbortError") {
+          console.warn("[MusicPanel] failed to load audio:", e);
+        }
       });
 
     return () => {
-      cancelled = true;
+      controller.abort();
       clearTimeout(showProgressTimer);
       cancelFades.current.forEach((f) => f());
       cancelFades.current = [];
@@ -784,32 +795,32 @@ export function MusicPanel({ instanceId }: Props) {
 
       <div className="music-panel__divider" />
 
-      {/* Row 3 — Now playing / download progress */}
+      {/* Row 3 — Now playing (always visible, independent of downloads) */}
       <div className="music-panel__row music-panel__now-playing">
-        {downloadProgress !== null ? (
-          <>
-            <span className="music-panel__np-label">Downloading…</span>
-            <div className="download-bar">
-              <div
-                className={`download-bar__fill${downloadProgress < 0 ? " download-bar__fill--indeterminate" : ""}`}
-                style={
-                  downloadProgress >= 0
-                    ? { width: `${downloadProgress}%` }
-                    : undefined
-                }
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <span className="music-panel__np-label">Now Playing</span>
-            <span className="music-panel__np-title">
-              <NoteIcon />
-              {customYoutubeId ? "Custom link" : (currentSong?.title ?? "—")}
-            </span>
-          </>
-        )}
+        <span className="music-panel__np-label">Now Playing</span>
+        <span className="music-panel__np-title">
+          <NoteIcon />
+          {customYoutubeId ? "Custom link" : (currentSong?.title ?? "—")}
+        </span>
       </div>
+
+      {/* Row 4 — download progress, its own area so it never displaces
+          the now-playing title */}
+      {downloadProgress !== null && (
+        <div className="music-panel__row music-panel__download">
+          <span className="music-panel__np-label">Downloading…</span>
+          <div className="download-bar">
+            <div
+              className={`download-bar__fill${downloadProgress < 0 ? " download-bar__fill--indeterminate" : ""}`}
+              style={
+                downloadProgress >= 0
+                  ? { width: `${downloadProgress}%` }
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
