@@ -91,7 +91,7 @@ export function DiceMenu({ instanceId }: Props) {
         >
           <span className="dice-menu__awaiting-dice">{myPendingRoll.dice}</span>
           <span className="dice-menu__awaiting-hint">
-            tap video 5× to reveal
+            tap video 3× to reveal
           </span>
         </motion.div>
       </div>

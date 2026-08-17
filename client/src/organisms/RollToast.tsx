@@ -28,32 +28,44 @@ export function RollToast() {
   const { state } = useStore();
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const processedRef = useRef<Set<string>>(new Set());
+  // Each entry's dismiss timer is tracked independently so that a second,
+  // concurrent roll re-rendering this effect can't cancel a still-pending
+  // timer for an earlier entry (which used to leave that toast stuck forever).
+  const timersRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
-    const newEntries = state.rollHistory.filter(
-      (e: RollEntry) => !processedRef.current.has(e.id),
+    const newIds = state.newRollIds.filter(
+      (id) => !processedRef.current.has(id),
     );
-    if (newEntries.length === 0) return;
+    if (newIds.length === 0) return;
 
-    newEntries.forEach((e: RollEntry) => processedRef.current.add(e.id));
+    newIds.forEach((id) => processedRef.current.add(id));
     setVisibleIds((prev) => {
       const next = new Set(prev);
-      newEntries.forEach((e: RollEntry) => next.add(e.id));
+      newIds.forEach((id) => next.add(id));
       return next;
     });
 
-    const timers = newEntries.map((e: RollEntry) =>
-      window.setTimeout(() => {
+    newIds.forEach((id) => {
+      const timer = window.setTimeout(() => {
         setVisibleIds((prev) => {
           const next = new Set(prev);
-          next.delete(e.id);
+          next.delete(id);
           return next;
         });
-      }, 5000),
-    );
+        timersRef.current.delete(id);
+      }, 5000);
+      timersRef.current.set(id, timer);
+    });
+  }, [state.newRollIds]);
 
-    return () => timers.forEach(clearTimeout);
-  }, [state.rollHistory]);
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
 
   const visible = state.rollHistory.filter((e: RollEntry) =>
     visibleIds.has(e.id),

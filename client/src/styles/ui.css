@@ -1060,6 +1060,60 @@
   border-color: var(--border-2);
 }
 
+/* Row 2.5 — custom YouTube link */
+.custom-track-form {
+  gap: 6px;
+}
+.custom-track-form__input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition:
+    border-color 0.14s,
+    background 0.14s;
+}
+.custom-track-form__input::placeholder {
+  color: var(--text-3);
+}
+.custom-track-form__input:focus {
+  border-color: var(--border-2);
+  background: rgba(255, 255, 255, 0.07);
+}
+.custom-track-form__input--error {
+  border-color: rgba(255, 90, 90, 0.7);
+}
+.custom-track-form__submit {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    color 0.14s,
+    border-color 0.14s,
+    background 0.14s;
+}
+.custom-track-form__submit:hover {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.05);
+}
+
 /* Row 3 — Now playing */
 .music-panel__now-playing {
   flex-direction: column;

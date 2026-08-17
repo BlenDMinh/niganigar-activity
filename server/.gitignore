@@ -3,6 +3,9 @@
 /node_modules
 /build
 
+# downloaded/cached audio for the music player
+/music-cache
+
 # Logs
 logs
 *.log

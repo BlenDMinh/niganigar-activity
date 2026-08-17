@@ -20,9 +20,23 @@ export interface State {
   channelId: string | null;
   users: User[];
   rollHistory: RollEntry[];
+  // Ids appended only on a live ROLL_REVEALED (never on the ROLL_HISTORY
+  // sync sent at join) — this is what RollToast watches so it doesn't
+  // replay the whole history as toasts when a player joins.
+  newRollIds: string[];
   pendingRolls: Record<string, PendingRollInfo>;
   musicCategory: string;
   musicSongIndex: number;
+  // Set when someone plays a pasted YouTube link instead of a catalog
+  // track. Takes precedence over musicCategory/musicSongIndex for
+  // playback while set.
+  customYoutubeId: string | null;
+  // Start-time offset (seconds) parsed from the custom link's t=/start=
+  // param, if any.
+  customOffsetSeconds: number;
+  // Server epoch ms when the current track started — used to compute a
+  // synced playback position so every client hears the same moment.
+  musicStartedAt: number;
   sfxVolumes: Record<string, number>;
 }
 
@@ -58,10 +72,22 @@ export type Action =
       payload: {
         category: string;
         songIndex: number;
+        customYoutubeId: string | null;
+        customOffsetSeconds: number;
+        startedAt: number;
         sfxVolumes: Record<string, number>;
       };
     }
-  | { type: "MUSIC_SYNC"; payload: { category: string; songIndex: number } }
+  | {
+      type: "MUSIC_SYNC";
+      payload: {
+        category: string;
+        songIndex: number;
+        customYoutubeId: string | null;
+        customOffsetSeconds: number;
+        startedAt: number;
+      };
+    }
   | {
       type: "SFX_SYNC";
       payload: { sfxId: string; volume: number };
@@ -115,6 +141,7 @@ function reducer(state: State, action: Action): State {
         ...state,
         pendingRolls: rest,
         rollHistory: [action.payload.entry, ...state.rollHistory],
+        newRollIds: [...state.newRollIds, action.payload.entry.id],
       };
     }
     case "ROLL_CANCELLED": {
@@ -128,6 +155,9 @@ function reducer(state: State, action: Action): State {
         ...state,
         musicCategory: action.payload.category,
         musicSongIndex: action.payload.songIndex,
+        customYoutubeId: action.payload.customYoutubeId,
+        customOffsetSeconds: action.payload.customOffsetSeconds,
+        musicStartedAt: action.payload.startedAt,
         sfxVolumes: action.payload.sfxVolumes,
       };
     case "MUSIC_SYNC":
@@ -135,6 +165,9 @@ function reducer(state: State, action: Action): State {
         ...state,
         musicCategory: action.payload.category,
         musicSongIndex: action.payload.songIndex,
+        customYoutubeId: action.payload.customYoutubeId,
+        customOffsetSeconds: action.payload.customOffsetSeconds,
+        musicStartedAt: action.payload.startedAt,
       };
     case "SFX_SYNC":
       return {
@@ -155,9 +188,13 @@ const initialState: State = {
   channelId: null,
   users: [],
   rollHistory: [],
+  newRollIds: [],
   pendingRolls: {},
   musicCategory: "tavern",
   musicSongIndex: 0,
+  customYoutubeId: null,
+  customOffsetSeconds: 0,
+  musicStartedAt: Date.now(),
   sfxVolumes: {},
 };
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getSocket } from "../socket/client";
 import { useStore } from "../state/store";
+import { parseYoutubeLink } from "../utils/youtube";
 import {
   CATEGORY_KEYS,
   CATEGORY_LABELS,
@@ -257,15 +258,67 @@ const popupVariants = {
 
 const FADE_MS = 700;
 const DEFAULT_VOLUME = 0.05;
+// How far (seconds) a client's playback position may drift from the
+// server-derived expected position before we forcibly reseek it.
+const DRIFT_TOLERANCE_S = 1.5;
+const DRIFT_CHECK_MS = 20000;
+
+const SERVER_URL = import.meta.env.VITE_SERVER_URL as string;
+
+function audioUrl(youtubeId: string): string {
+  return `${SERVER_URL}/api/music/audio/${youtubeId}`;
+}
+
+// Position `audio` should be at right now, given when the track started
+// and how far into it playback should always begin — the track loops
+// within [offsetSeconds, duration) rather than replaying the skipped part
+// on every loop.
+function expectedPosition(
+  startedAt: number,
+  offsetSeconds: number,
+  duration: number,
+): number {
+  const loopSpan = Math.max(duration - offsetSeconds, 0.1);
+  return offsetSeconds + (((Date.now() - startedAt) / 1000) % loopSpan);
+}
+
+// Seeks `audio` to where it should be right now given when the (looping)
+// track started, so every listener hears the same moment regardless of
+// when their own client started playing it.
+function seekToSynced(
+  audio: HTMLAudioElement,
+  startedAt: number,
+  offsetSeconds: number,
+) {
+  const apply = () => {
+    const duration = audio.duration;
+    if (!isFinite(duration) || duration <= 0) return;
+    audio.currentTime = expectedPosition(startedAt, offsetSeconds, duration);
+  };
+  if (audio.readyState >= 1) apply();
+  else audio.addEventListener("loadedmetadata", apply, { once: true });
+}
 
 export function MusicPanel({ instanceId }: Props) {
   const { state, dispatch } = useStore();
   const category = state.musicCategory as CategoryKey;
   const songIndex = state.musicSongIndex;
+  const customYoutubeId = state.customYoutubeId;
+  const customOffsetSeconds = state.customOffsetSeconds;
+  const musicStartedAt = state.musicStartedAt;
   const sfxVolumes = state.sfxVolumes;
   const [musicVolume, setMusicVolume] = useState(DEFAULT_VOLUME);
   const [openSfx, setOpenSfx] = useState<string | null>(null);
   const [showVol, setShowVol] = useState(false);
+  const [customInput, setCustomInput] = useState("");
+  const [customError, setCustomError] = useState(false);
+
+  // A custom pasted link overrides whatever the catalog selection is.
+  const activeSong = MUSIC_CATEGORIES[category][songIndex];
+  const activeYoutubeId = customYoutubeId || activeSong?.youtubeId || "";
+  const activeOffsetSeconds = customYoutubeId
+    ? customOffsetSeconds
+    : activeSong?.offsetSeconds ?? 0;
 
   // Two audio slots for crossfade
   const audioA = useRef(new Audio());
@@ -279,6 +332,16 @@ export function MusicPanel({ instanceId }: Props) {
     musicVolumeRef.current = musicVolume;
   }, [musicVolume]);
 
+  // Keep refs so the drift-check interval always reads the latest sync anchor
+  const musicStartedAtRef = useRef(musicStartedAt);
+  useEffect(() => {
+    musicStartedAtRef.current = musicStartedAt;
+  }, [musicStartedAt]);
+  const activeOffsetSecondsRef = useRef(activeOffsetSeconds);
+  useEffect(() => {
+    activeOffsetSecondsRef.current = activeOffsetSeconds;
+  }, [activeOffsetSeconds]);
+
   const sfxRefs = useRef<Record<string, HTMLAudioElement>>({});
   const sfxSrcsRef = useRef<Record<string, string>>({});
 
@@ -287,8 +350,8 @@ export function MusicPanel({ instanceId }: Props) {
     cancelFades.current.forEach((f) => f());
     cancelFades.current = [];
 
-    const src = MUSIC_CATEGORIES[category][songIndex]?.src;
-    if (!src) return;
+    if (!activeYoutubeId) return;
+    const src = audioUrl(activeYoutubeId);
 
     const elA = audioA.current;
     const elB = audioB.current;
@@ -313,6 +376,7 @@ export function MusicPanel({ instanceId }: Props) {
       inAudio.loop = true;
       inAudio.volume = musicVolumeRef.current;
       void inAudio.play().catch(() => {});
+      seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
       return;
     }
 
@@ -324,13 +388,35 @@ export function MusicPanel({ instanceId }: Props) {
     inAudio.loop = true;
     inAudio.volume = 0;
     void inAudio.play().catch(() => {});
+    seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
     cancelFades.current.push(fadeIn(inAudio, musicVolumeRef.current, FADE_MS));
 
     return () => {
       cancelFades.current.forEach((f) => f());
       cancelFades.current = [];
     };
-  }, [category, songIndex]);
+  }, [activeYoutubeId, musicStartedAt, activeOffsetSeconds]);
+
+  // ── periodic drift correction — nudges the playing track back in line
+  // with the server-derived position if it's slipped past tolerance ───
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const active =
+        activeSlot.current === "a" ? audioA.current : audioB.current;
+      const duration = active.duration;
+      if (!active.src || active.paused || !isFinite(duration) || duration <= 0)
+        return;
+      const expected = expectedPosition(
+        musicStartedAtRef.current,
+        activeOffsetSecondsRef.current,
+        duration,
+      );
+      if (Math.abs(active.currentTime - expected) > DRIFT_TOLERANCE_S) {
+        active.currentTime = expected;
+      }
+    }, DRIFT_CHECK_MS);
+    return () => clearInterval(interval);
+  }, []);
 
   // ── master volume — update active slot only, no crossfade ───────
   useEffect(() => {
@@ -380,7 +466,7 @@ export function MusicPanel({ instanceId }: Props) {
   function handleCategoryClick(cat: CategoryKey) {
     const songs = MUSIC_CATEGORIES[cat];
     const validIndices = songs.reduce<number[]>((acc, s, i) => {
-      if (s.src) acc.push(i);
+      if (s.youtubeId) acc.push(i);
       return acc;
     }, []);
     if (validIndices.length === 0) return;
@@ -393,11 +479,52 @@ export function MusicPanel({ instanceId }: Props) {
       nextIndex = validIndices[Math.floor(Math.random() * validIndices.length)];
     }
 
-    dispatch({ type: "MUSIC_SYNC", payload: { category: cat, songIndex: nextIndex } });
+    // Use our own clock as the sync anchor for our local playback; the
+    // server stamps its own (near-identical) time for everyone else.
+    const startedAt = Date.now();
+    dispatch({
+      type: "MUSIC_SYNC",
+      payload: {
+        category: cat,
+        songIndex: nextIndex,
+        customYoutubeId: null,
+        customOffsetSeconds: 0,
+        startedAt,
+      },
+    });
     getSocket().emit("music_change", {
       instanceId,
       category: cat,
       songIndex: nextIndex,
+    });
+  }
+
+  function handleCustomSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const parsed = parseYoutubeLink(customInput);
+    if (!parsed) {
+      setCustomError(true);
+      return;
+    }
+
+    setCustomError(false);
+    setCustomInput("");
+
+    const startedAt = Date.now();
+    dispatch({
+      type: "MUSIC_SYNC",
+      payload: {
+        category,
+        songIndex,
+        customYoutubeId: parsed.id,
+        customOffsetSeconds: parsed.offsetSeconds,
+        startedAt,
+      },
+    });
+    getSocket().emit("music_change_custom", {
+      instanceId,
+      youtubeId: parsed.id,
+      offsetSeconds: parsed.offsetSeconds,
     });
   }
 
@@ -493,7 +620,7 @@ export function MusicPanel({ instanceId }: Props) {
         {CATEGORY_KEYS.map((cat) => (
           <button
             key={cat}
-            className={`cat-btn${cat === category ? " cat-btn--active" : ""}`}
+            className={`cat-btn${cat === category && !customYoutubeId ? " cat-btn--active" : ""}`}
             onClick={() => handleCategoryClick(cat)}
             title={
               cat === category
@@ -508,12 +635,38 @@ export function MusicPanel({ instanceId }: Props) {
 
       <div className="music-panel__divider" />
 
+      {/* Row 2.5 — custom YouTube link */}
+      <form
+        className="music-panel__row custom-track-form"
+        onSubmit={handleCustomSubmit}
+      >
+        <input
+          type="text"
+          className={`custom-track-form__input${customError ? " custom-track-form__input--error" : ""}`}
+          placeholder="Paste a YouTube link…"
+          value={customInput}
+          onChange={(e) => {
+            setCustomInput(e.target.value);
+            if (customError) setCustomError(false);
+          }}
+        />
+        <button
+          type="submit"
+          className="custom-track-form__submit"
+          title="Play this link for everyone"
+        >
+          ▶
+        </button>
+      </form>
+
+      <div className="music-panel__divider" />
+
       {/* Row 3 — Now playing */}
       <div className="music-panel__row music-panel__now-playing">
         <span className="music-panel__np-label">Now Playing</span>
         <span className="music-panel__np-title">
           <NoteIcon />
-          {currentSong?.title ?? "—"}
+          {customYoutubeId ? "Custom link" : (currentSong?.title ?? "—")}
         </span>
       </div>
     </div>
