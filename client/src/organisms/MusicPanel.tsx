@@ -287,7 +287,12 @@ async function fetchAudioBlobUrl(
   signal: AbortSignal,
   onProgress: (receivedBytes: number, estimatedBytes: number | null) => void,
 ): Promise<string> {
-  const res = await fetch(audioUrl(youtubeId, isCustom), { signal });
+  const url = audioUrl(youtubeId, isCustom);
+  console.log(`[MusicPanel] fetch(${url}) starting`);
+  const res = await fetch(url, { signal });
+  console.log(
+    `[MusicPanel] fetch(${url}) → ${res.status} ${res.statusText}, content-type=${res.headers.get("Content-Type")}, body=${res.body ? "stream" : "null"}`,
+  );
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`);
 
   const estimatedHeader = res.headers.get("X-Estimated-Bytes");
@@ -416,10 +421,17 @@ export function MusicPanel({ instanceId }: Props) {
 
   // ── music crossfade on category / song change ────────────────────
   useEffect(() => {
+    console.log(
+      `[MusicPanel] crossfade effect fired: category=${category} songIndex=${songIndex} customYoutubeId=${customYoutubeId} activeYoutubeId="${activeYoutubeId}" musicStartedAt=${musicStartedAt}`,
+    );
+
     cancelFades.current.forEach((f) => f());
     cancelFades.current = [];
 
-    if (!activeYoutubeId) return;
+    if (!activeYoutubeId) {
+      console.log(`[MusicPanel] bailing: activeYoutubeId is falsy`);
+      return;
+    }
 
     const elA = audioA.current;
     const elB = audioB.current;
@@ -454,6 +466,7 @@ export function MusicPanel({ instanceId }: Props) {
       if (!controller.signal.aborted) setDownloadProgress((p) => p ?? -1);
     }, 300);
 
+    console.log(`[MusicPanel] calling fetchAudioBlobUrl(${activeYoutubeId})`);
     void fetchAudioBlobUrl(
       activeYoutubeId,
       isCustom,
@@ -465,6 +478,9 @@ export function MusicPanel({ instanceId }: Props) {
       },
     )
       .then((blobUrl) => {
+        console.log(
+          `[MusicPanel] fetchAudioBlobUrl(${activeYoutubeId}) resolved: ${blobUrl}`,
+        );
         clearTimeout(showProgressTimer);
         setDownloadProgress(null);
         revokeIfBlobUrl(inAudio.src);
@@ -497,6 +513,10 @@ export function MusicPanel({ instanceId }: Props) {
         );
       })
       .catch((e) => {
+        console.log(
+          `[MusicPanel] fetchAudioBlobUrl(${activeYoutubeId}) rejected:`,
+          e,
+        );
         clearTimeout(showProgressTimer);
         setDownloadProgress(null);
         // A superseded-by-a-newer-switch abort is expected, not a real
