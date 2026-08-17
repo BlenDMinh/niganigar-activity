@@ -265,8 +265,8 @@ const DRIFT_CHECK_MS = 20000;
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL as string;
 
-function audioUrl(youtubeId: string): string {
-  return `${SERVER_URL}/api/music/audio/${youtubeId}`;
+function audioUrl(youtubeId: string, isCustom: boolean): string {
+  return `${SERVER_URL}/api/music/audio/${youtubeId}${isCustom ? "?custom=1" : ""}`;
 }
 
 // Discord's Activity CSP restricts `media-src` to 'self'/blob:/data: — an
@@ -274,11 +274,40 @@ function audioUrl(youtubeId: string): string {
 // blocked. fetch() is governed by connect-src instead (which does allow
 // our origin), so we pull the bytes ourselves and hand the element a
 // blob: URL, which the CSP explicitly permits.
-async function fetchAudioBlobUrl(youtubeId: string): Promise<string> {
-  const res = await fetch(audioUrl(youtubeId));
+//
+// Reads the body as a stream (rather than res.blob()) so onProgress can
+// report real download progress — the server sends the actual size of
+// the selected format via X-Estimated-Bytes when it's known (always true
+// for an already-cached file; for a fresh download it's yt-dlp's own
+// estimate, close enough for a progress bar). Falls back to res.blob()
+// if streaming reads aren't available.
+async function fetchAudioBlobUrl(
+  youtubeId: string,
+  isCustom: boolean,
+  onProgress: (receivedBytes: number, estimatedBytes: number | null) => void,
+): Promise<string> {
+  const res = await fetch(audioUrl(youtubeId, isCustom));
   if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+
+  const estimatedHeader = res.headers.get("X-Estimated-Bytes");
+  const estimatedBytes = estimatedHeader ? Number(estimatedHeader) : null;
+
+  if (!res.body) {
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  const reader = res.body.getReader();
+  const chunks: BlobPart[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+    onProgress(received, estimatedBytes);
+  }
+  return URL.createObjectURL(new Blob(chunks));
 }
 
 function revokeIfBlobUrl(src: string) {
@@ -328,6 +357,12 @@ export function MusicPanel({ instanceId }: Props) {
   const [showVol, setShowVol] = useState(false);
   const [customInput, setCustomInput] = useState("");
   const [customError, setCustomError] = useState(false);
+  // null = hidden, -1 = loading but total size unknown, 0-100 = known %.
+  // Only shown once loading crosses a short delay, so an already-cached
+  // (near-instant) fetch never flashes it.
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(
+    null,
+  );
 
   // A custom pasted link overrides whatever the catalog selection is.
   const activeSong = MUSIC_CATEGORIES[category][songIndex];
@@ -386,9 +421,24 @@ export function MusicPanel({ instanceId }: Props) {
     activeSlot.current = inAudio === elA ? "a" : "b";
 
     let cancelled = false;
+    const isCustom = !!customYoutubeId;
 
-    void fetchAudioBlobUrl(activeYoutubeId)
+    // Only show "Downloading…" if the fetch is actually slow — an
+    // already-cached track resolves in a handful of ms and should never
+    // flash a progress bar.
+    const showProgressTimer = window.setTimeout(() => {
+      if (!cancelled) setDownloadProgress((p) => p ?? -1);
+    }, 300);
+
+    void fetchAudioBlobUrl(activeYoutubeId, isCustom, (received, estimated) => {
+      if (cancelled) return;
+      setDownloadProgress(
+        estimated ? Math.min(99, (received / estimated) * 100) : -1,
+      );
+    })
       .then((blobUrl) => {
+        clearTimeout(showProgressTimer);
+        setDownloadProgress(null);
         if (cancelled) {
           URL.revokeObjectURL(blobUrl);
           return;
@@ -422,14 +472,24 @@ export function MusicPanel({ instanceId }: Props) {
           fadeIn(inAudio, musicVolumeRef.current, FADE_MS),
         );
       })
-      .catch((e) => console.warn("[MusicPanel] failed to load audio:", e));
+      .catch((e) => {
+        clearTimeout(showProgressTimer);
+        setDownloadProgress(null);
+        console.warn("[MusicPanel] failed to load audio:", e);
+      });
 
     return () => {
       cancelled = true;
+      clearTimeout(showProgressTimer);
       cancelFades.current.forEach((f) => f());
       cancelFades.current = [];
     };
-  }, [activeYoutubeId, musicStartedAt, activeOffsetSeconds]);
+  }, [
+    activeYoutubeId,
+    musicStartedAt,
+    activeOffsetSeconds,
+    customYoutubeId,
+  ]);
 
   // ── periodic drift correction — nudges the playing track back in line
   // with the server-derived position if it's slipped past tolerance ───
@@ -724,13 +784,31 @@ export function MusicPanel({ instanceId }: Props) {
 
       <div className="music-panel__divider" />
 
-      {/* Row 3 — Now playing */}
+      {/* Row 3 — Now playing / download progress */}
       <div className="music-panel__row music-panel__now-playing">
-        <span className="music-panel__np-label">Now Playing</span>
-        <span className="music-panel__np-title">
-          <NoteIcon />
-          {customYoutubeId ? "Custom link" : (currentSong?.title ?? "—")}
-        </span>
+        {downloadProgress !== null ? (
+          <>
+            <span className="music-panel__np-label">Downloading…</span>
+            <div className="download-bar">
+              <div
+                className={`download-bar__fill${downloadProgress < 0 ? " download-bar__fill--indeterminate" : ""}`}
+                style={
+                  downloadProgress >= 0
+                    ? { width: `${downloadProgress}%` }
+                    : undefined
+                }
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="music-panel__np-label">Now Playing</span>
+            <span className="music-panel__np-title">
+              <NoteIcon />
+              {customYoutubeId ? "Custom link" : (currentSong?.title ?? "—")}
+            </span>
+          </>
+        )}
       </div>
     </div>
   );

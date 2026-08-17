@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { createReadStream, statSync } from 'fs';
-import { MusicCacheService } from './music-cache.service';
+import { CachedTrack, MusicCacheService } from './music-cache.service';
 import { MusicCatalogService } from './music-catalog.service';
 
 const VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
@@ -30,6 +30,7 @@ export class MusicController {
   @Get('audio/:videoId')
   async streamAudio(
     @Param('videoId') videoId: string,
+    @Query('custom') customParam: string | undefined,
     @Headers('range') range: string | undefined,
     @Res() res: Response,
   ) {
@@ -37,7 +38,46 @@ export class MusicController {
       throw new BadRequestException('Invalid video id');
     }
 
-    const track = await this.musicCache.getOrFetch(videoId);
+    // Catalog songs are curated and few, so they're always kept. Custom
+    // pasted links can be anything, so we track recency here and let the
+    // cache service evict the oldest ones beyond its cap.
+    if (customParam === '1') {
+      await this.musicCache.touchCustom(videoId);
+    }
+
+    const cached = await this.musicCache.readCached(videoId);
+    if (cached) {
+      this.serveCached(cached, range, res);
+      return;
+    }
+
+    if (this.musicCache.isDownloading(videoId)) {
+      // Someone else already triggered this download — wait for it and
+      // serve the finished file. No live progress for this caller, but
+      // that's a rare race (two people picking a brand-new song within
+      // the same few seconds) and it'll still play once ready.
+      const track = await this.musicCache.getOrFetch(videoId);
+      this.serveCached(track, undefined, res);
+      return;
+    }
+
+    // First request for this video — stream live while it's being cached,
+    // so the client can show real download progress instead of hanging.
+    const live = await this.musicCache.streamLive(videoId);
+    res.setHeader('Content-Type', live.mimeType);
+    if (live.estimatedBytes) {
+      res.setHeader('X-Estimated-Bytes', String(live.estimatedBytes));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Estimated-Bytes');
+    }
+    live.stream.on('error', () => res.destroy());
+    live.stream.pipe(res);
+  }
+
+  private serveCached(
+    track: CachedTrack,
+    range: string | undefined,
+    res: Response,
+  ) {
     const { size } = statSync(track.filePath);
 
     res.setHeader('Content-Type', track.mimeType);

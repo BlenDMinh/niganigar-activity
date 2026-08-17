@@ -1,9 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { existsSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { createWriteStream, existsSync } from 'fs';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { createWriteStream } from 'fs';
-import { pipeline } from 'stream/promises';
+import { PassThrough, Readable } from 'stream';
 import { YoutubeAudioService } from './youtube-audio.service';
 
 export interface CachedTrack {
@@ -12,7 +11,19 @@ export interface CachedTrack {
   durationSeconds: number | null;
 }
 
+export interface LiveStream {
+  stream: Readable;
+  mimeType: string;
+  estimatedBytes: number | null;
+}
+
 const CACHE_DIR = join(process.cwd(), 'music-cache');
+const CUSTOM_LRU_PATH = join(CACHE_DIR, '.custom-lru.json');
+
+// Catalog songs are curated and few — always kept. Custom pasted links can
+// be literally anything, so only the most recently played handful are
+// kept on disk to avoid unbounded growth.
+const MAX_CUSTOM_CACHED = 5;
 
 const EXT_BY_MIME: Record<string, string> = {
   'audio/webm': 'webm',
@@ -27,18 +38,28 @@ interface CacheMeta {
   ext: string;
 }
 
-// Downloaded audio is kept on disk indefinitely, keyed by videoId, so a
-// song is only ever extracted from YouTube once. Concurrent first-plays of
-// the same song share a single in-flight download instead of racing.
 @Injectable()
 export class MusicCacheService implements OnModuleInit {
   private readonly logger = new Logger(MusicCacheService.name);
   private readonly inflight = new Map<string, Promise<CachedTrack>>();
+  // Most-recently-used last. Only videoIds explicitly touched via
+  // touchCustom() ever land here — catalog songs never do, so they're
+  // never eligible for eviction.
+  private customLru: string[] = [];
 
   constructor(private readonly youtubeAudio: YoutubeAudioService) {}
 
   async onModuleInit() {
     await mkdir(CACHE_DIR, { recursive: true });
+    this.customLru = await this.loadCustomLru();
+  }
+
+  isDownloading(videoId: string): boolean {
+    return this.inflight.has(videoId);
+  }
+
+  async readCached(videoId: string): Promise<CachedTrack | null> {
+    return this.readFromDisk(videoId);
   }
 
   async getOrFetch(videoId: string): Promise<CachedTrack> {
@@ -53,6 +74,133 @@ export class MusicCacheService implements OnModuleInit {
     );
     this.inflight.set(videoId, task);
     return task;
+  }
+
+  // Starts a fresh download that streams live to the caller (e.g. an HTTP
+  // response) while simultaneously being written to the on-disk cache.
+  // Registers itself in `inflight` the same way getOrFetch()'s internal
+  // download does, so any concurrent request for the same videoId dedupes
+  // onto this one via getOrFetch() — they just won't get a live stream of
+  // their own, they'll wait for the file and read it from disk once ready.
+  async streamLive(videoId: string): Promise<LiveStream> {
+    this.logger.log(`Downloading audio for ${videoId}…`);
+    const audio = await this.youtubeAudio.fetchAudio(videoId);
+    const ext = EXT_BY_MIME[audio.mimeType] ?? 'webm';
+    const filePath = join(CACHE_DIR, `${videoId}.${ext}`);
+
+    const fileStream = createWriteStream(filePath);
+    const responseStream = new PassThrough();
+    audio.stream.pipe(fileStream);
+    audio.stream.pipe(responseStream);
+
+    const task = new Promise<CachedTrack>((resolve, reject) => {
+      let settled = false;
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        fileStream.destroy();
+        responseStream.destroy(err);
+        void rm(filePath, { force: true });
+        reject(err);
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        const meta: CacheMeta = {
+          mimeType: audio.mimeType,
+          durationSeconds: audio.durationSeconds,
+          ext,
+        };
+        writeFile(join(CACHE_DIR, `${videoId}.json`), JSON.stringify(meta))
+          .then(() => {
+            this.logger.log(`Cached audio for ${videoId} → ${filePath}`);
+            resolve({
+              filePath,
+              mimeType: audio.mimeType,
+              durationSeconds: audio.durationSeconds,
+            });
+          })
+          .catch(fail);
+      };
+
+      audio.stream.on('error', fail);
+      fileStream.on('error', fail);
+      // A failed yt-dlp process still ends its stdout "cleanly" as far as
+      // the pipe is concerned — fileStream.finish() fires the same way it
+      // would for a real success (Node fires stdout's 'end' before the
+      // process 'close' event, so there's no way to catch this via stream
+      // errors alone). Only trust it once we've also confirmed the
+      // process actually exited 0.
+      fileStream.on('finish', () => {
+        void audio.exitCode.then((code) => {
+          if (code !== 0) {
+            fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
+            return;
+          }
+          succeed();
+        });
+      });
+    });
+    const trackedTask = task.finally(() => this.inflight.delete(videoId));
+    // streamLive() itself never awaits `task` (that's the whole point —
+    // it returns the live stream immediately). A rejection with zero
+    // listeners is an unhandled promise rejection, which crashes the
+    // whole Node process by default. This no-op catch is just to satisfy
+    // that — any concurrent getOrFetch() call for the same videoId still
+    // gets the real rejection when *it* awaits this same promise.
+    trackedTask.catch(() => {});
+    this.inflight.set(videoId, trackedTask);
+
+    return {
+      stream: responseStream,
+      mimeType: audio.mimeType,
+      estimatedBytes: audio.estimatedBytes,
+    };
+  }
+
+  // Marks a custom-link videoId as just-used, evicting the least-recently
+  // used custom entries beyond MAX_CUSTOM_CACHED. No-op for catalog songs
+  // (they're simply never passed through this).
+  async touchCustom(videoId: string): Promise<void> {
+    this.customLru = this.customLru.filter((id) => id !== videoId);
+    this.customLru.push(videoId);
+
+    while (this.customLru.length > MAX_CUSTOM_CACHED) {
+      const evictId = this.customLru.shift();
+      if (evictId) await this.evictFromDisk(evictId);
+    }
+
+    await this.saveCustomLru();
+  }
+
+  private async evictFromDisk(videoId: string): Promise<void> {
+    const metaPath = join(CACHE_DIR, `${videoId}.json`);
+    try {
+      const meta = JSON.parse(await readFile(metaPath, 'utf8')) as CacheMeta;
+      await rm(join(CACHE_DIR, `${videoId}.${meta.ext}`), { force: true });
+    } catch {
+      // no metadata (e.g. never finished downloading) — nothing to clean up
+    }
+    await rm(metaPath, { force: true });
+    this.logger.log(`Evicted cached custom-link audio for ${videoId}`);
+  }
+
+  private async loadCustomLru(): Promise<string[]> {
+    if (!existsSync(CUSTOM_LRU_PATH)) return [];
+    try {
+      const parsed: unknown = JSON.parse(
+        await readFile(CUSTOM_LRU_PATH, 'utf8'),
+      );
+      return Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === 'string')
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private saveCustomLru(): Promise<void> {
+    return writeFile(CUSTOM_LRU_PATH, JSON.stringify(this.customLru));
   }
 
   private async readFromDisk(videoId: string): Promise<CachedTrack | null> {
@@ -79,7 +227,33 @@ export class MusicCacheService implements OnModuleInit {
     const ext = EXT_BY_MIME[audio.mimeType] ?? 'webm';
     const filePath = join(CACHE_DIR, `${videoId}.${ext}`);
 
-    await pipeline(audio.stream, createWriteStream(filePath));
+    await new Promise<void>((resolve, reject) => {
+      const fileStream = createWriteStream(filePath);
+      audio.stream.pipe(fileStream);
+      let settled = false;
+      const fail = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        fileStream.destroy();
+        void rm(filePath, { force: true });
+        reject(err);
+      };
+      audio.stream.on('error', fail);
+      fileStream.on('error', fail);
+      // See streamLive()'s identical comment — fileStream.finish() alone
+      // doesn't mean the download actually succeeded.
+      fileStream.on('finish', () => {
+        void audio.exitCode.then((code) => {
+          if (code !== 0) {
+            fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
+            return;
+          }
+          if (settled) return;
+          settled = true;
+          resolve();
+        });
+      });
+    });
 
     const meta: CacheMeta = {
       mimeType: audio.mimeType,

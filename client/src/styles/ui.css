@@ -1154,6 +1154,34 @@
   font-style: italic;
 }
 
+/* Download progress bar — shown in place of "Now Playing" while a fresh
+   (not-yet-cached) track is being fetched */
+.download-bar {
+  width: 100%;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.download-bar__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.55);
+  transition: width 0.2s ease;
+}
+.download-bar__fill--indeterminate {
+  width: 40% !important;
+  animation: download-bar-indeterminate 1.1s ease-in-out infinite;
+}
+@keyframes download-bar-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
 /* ─── Auth screens ───────────────────────────────────────────── */
 .auth-screen {
   position: fixed;
