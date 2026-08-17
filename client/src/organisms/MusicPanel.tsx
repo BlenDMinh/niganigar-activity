@@ -324,8 +324,16 @@ function expectedPosition(
   offsetSeconds: number,
   duration: number,
 ): number {
-  const loopSpan = Math.max(duration - offsetSeconds, 0.1);
-  return offsetSeconds + (((Date.now() - startedAt) / 1000) % loopSpan);
+  // Clamped defensively: `offsetSeconds` can exceed `duration` (a custom
+  // link's t= past the actual video length), and during a rapid song
+  // switch this can be called with a startedAt/offsetSeconds pair for a
+  // different track than the `duration` just loaded into this <audio>
+  // slot. An out-of-range result thrown straight into `currentTime`
+  // raises an uncaught IndexSizeError and crashes playback setup.
+  const safeOffset = Math.min(Math.max(offsetSeconds, 0), Math.max(duration - 0.1, 0));
+  const loopSpan = Math.max(duration - safeOffset, 0.1);
+  const position = safeOffset + (((Date.now() - startedAt) / 1000) % loopSpan);
+  return Math.min(Math.max(position, 0), Math.max(duration - 0.05, 0));
 }
 
 // Seeks `audio` to where it should be right now given when the (looping)

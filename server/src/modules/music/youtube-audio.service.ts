@@ -47,6 +47,19 @@ const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
 // back to storyboard-only "formats" with no visible error.
 const REMOTE_COMPONENTS_ARGS = ['--remote-components', 'ejs:github'];
 
+// yt-dlp's own client cascade will happily fall back to the `android_vr`
+// player client when other clients don't expose a matching format for a
+// given video. android_vr-sourced stream URLs are fundamentally
+// incompatible with cookie-based auth (confirmed live: yt-dlp selects it,
+// downloads the m3u8/format info fine, then the actual data request
+// 403s) — cookies only help against the bot-check on clients that accept
+// them at all. Excluding it forces yt-dlp onto a client where our cookies
+// actually apply, even if that means fewer format choices for some videos.
+const EXTRACTOR_ARGS = [
+  '--extractor-args',
+  'youtube:player_client=default,-android_vr',
+];
+
 // Cap quality instead of always grabbing the highest-bitrate audio-only
 // stream (~130kbps opus/m4a on most videos) — this is background music,
 // not something anyone's critically listening to, and every listener
@@ -145,6 +158,7 @@ export class YoutubeAudioService implements OnModuleInit {
           '--no-playlist',
           '--no-warnings',
           ...REMOTE_COMPONENTS_ARGS,
+          ...EXTRACTOR_ARGS,
           ...this.cookieArgs(),
           '-o',
           '-',
@@ -228,6 +242,7 @@ export class YoutubeAudioService implements OnModuleInit {
         '--skip-download',
         '--no-warnings',
         ...REMOTE_COMPONENTS_ARGS,
+        ...EXTRACTOR_ARGS,
         ...this.cookieArgs(),
         '--print',
         '%(duration)s\t%(ext)s\t%(filesize,filesize_approx)s',
@@ -271,6 +286,7 @@ export class YoutubeAudioService implements OnModuleInit {
         '--list-formats',
         '--no-warnings',
         ...REMOTE_COMPONENTS_ARGS,
+        ...EXTRACTOR_ARGS,
         ...this.cookieArgs(),
         url,
       ]);
