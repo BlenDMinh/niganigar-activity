@@ -29,15 +29,6 @@ const MIME_BY_EXT: Record<string, string> = {
 // long"), so a file mount is the only robust option here.
 const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
 
-// With cookies attached, yt-dlp's automatic client selection picked a "tv"
-// player client that returned nothing but storyboard thumbnails for some
-// videos — no audio/video formats at all. Forcing android_vr consistently
-// returns the full format list regardless of cookie presence.
-const PLAYER_CLIENT_ARGS = [
-  '--extractor-args',
-  'youtube:player_client=android_vr',
-];
-
 // youtubei.js (pure npm) can no longer fetch playable stream URLs for most
 // videos without solving YouTube's PO-token anti-bot challenge, which in
 // practice requires a headless browser. yt-dlp ships its own actively
@@ -71,7 +62,6 @@ export class YoutubeAudioService implements OnModuleInit {
         'bestaudio/best',
         '--no-playlist',
         '--no-warnings',
-        ...PLAYER_CLIENT_ARGS,
         ...this.cookieArgs(),
         '-o',
         '-',
@@ -109,7 +99,6 @@ export class YoutubeAudioService implements OnModuleInit {
         '--no-playlist',
         '--skip-download',
         '--no-warnings',
-        ...PLAYER_CLIENT_ARGS,
         ...this.cookieArgs(),
         '--print',
         '%(duration)s\t%(ext)s',
@@ -151,7 +140,6 @@ export class YoutubeAudioService implements OnModuleInit {
       const child = spawn('yt-dlp', [
         '--list-formats',
         '--no-warnings',
-        ...PLAYER_CLIENT_ARGS,
         ...this.cookieArgs(),
         url,
       ]);
