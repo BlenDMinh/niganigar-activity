@@ -52,10 +52,17 @@ const REMOTE_COMPONENTS_ARGS = ['--remote-components', 'ejs:github'];
 // not something anyone's critically listening to, and every listener
 // fetches the full file fresh (no partial/streaming benefit, since it's
 // pulled via fetch() -> blob: for the CSP fix). ~96kbps is still solid for
-// this use case at roughly half the bandwidth/storage per song. Falls
-// back to any audio-only stream, then any stream at all, if nothing in
-// range is offered.
-const FORMAT_SELECTOR = 'bestaudio[abr<=96]/bestaudio/best';
+// this use case at roughly half the bandwidth/storage per song.
+//
+// Some extraction attempts offer no audio-only stream at all (YouTube's
+// own per-request volatility, not something we control) — in that case
+// prefer the smallest available *non-HLS* stream over the largest. HLS
+// (m3u8) formats are fetched as dozens of separate fragment requests
+// instead of one file, which is meaningfully less reliable, and without
+// the protocol exclusion here `best` would happily pick a huge 1080p HLS
+// stream over a small plain-https one for no benefit to us.
+const FORMAT_SELECTOR =
+  'bestaudio[abr<=96][protocol!*=m3u8]/bestaudio[protocol!*=m3u8]/worst[protocol!*=m3u8]/best';
 
 // YouTube's own extraction behavior varies request-to-request for the
 // same video (different internal player client picked each time, with
