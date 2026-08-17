@@ -1154,9 +1154,20 @@
   font-style: italic;
 }
 
-/* Row 4 — download progress. Its own row below "Now Playing" (never
-   displaces the title) while a fresh, not-yet-cached track is fetching. */
+/* Row 4 — download progress. Absolutely positioned below the panel
+   instead of an in-flow row: an in-flow row changes the panel's total
+   height every time it toggles, and since .music-panel is anchored by
+   `bottom`, that shift moved the whole panel (all rows above it) up/down
+   each time — visible as a flash/jump. Taking it out of flow means the
+   panel's height never depends on whether this is showing. */
 .music-panel__download {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 100%;
+  margin-top: 6px;
+  padding: 0;
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;

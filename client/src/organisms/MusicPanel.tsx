@@ -189,7 +189,13 @@ function CategoryIcon({ id }: { id: string }) {
     case "rest":
       return (
         <svg {...p}>
-          <path d="M12 4.5a6 6 0 1 1-7.5 7.5 5 5 0 0 0 7.5-7.5z" />
+          {/* Path's own bounding box is centered at ~(10.4,10.4), not
+              (8,8) like every other icon here — this offset recenters it
+              so it lines up with the rest of the row. */}
+          <path
+            d="M12 4.5a6 6 0 1 1-7.5 7.5 5 5 0 0 0 7.5-7.5z"
+            transform="translate(-2.37,-2.37)"
+          />
         </svg>
       );
     default:
@@ -486,12 +492,31 @@ export function MusicPanel({ instanceId }: Props) {
       isCustom,
       controller.signal,
       (received, estimated) => {
-        setDownloadProgress(
-          estimated ? Math.min(99, (received / estimated) * 100) : -1,
+        // Only update if the bar is already visible (i.e. the 300ms timer
+        // above already fired). Without this guard, a cached track's
+        // near-instant chunk(s) still call this at least once, briefly
+        // setting a non-null value and flashing the bar for a frame before
+        // the .then() below clears it back to null.
+        setDownloadProgress((p) =>
+          p === null
+            ? null
+            : estimated
+              ? Math.min(99, (received / estimated) * 100)
+              : -1,
         );
       },
     )
       .then((blobUrl) => {
+        // The fetch body can finish reading before the abort signal fires
+        // (common for cached songs that respond instantly). Without this
+        // guard the stale .then() still runs, pushes duplicate fade
+        // callbacks into cancelFades, and the next switch's cleanup
+        // cancels them all — including the live fadeIn — leaving
+        // inAudio.volume stuck at 0.
+        if (controller.signal.aborted) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
         console.log(
           `[MusicPanel] fetchAudioBlobUrl(${activeYoutubeId}) resolved: ${blobUrl}`,
         );
@@ -507,7 +532,11 @@ export function MusicPanel({ instanceId }: Props) {
           void inAudio
             .play()
             .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
-          seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+          try {
+            seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+          } catch (e) {
+            console.warn("[MusicPanel] seekToSynced failed:", e);
+          }
           return;
         }
 
@@ -521,10 +550,16 @@ export function MusicPanel({ instanceId }: Props) {
         void inAudio
           .play()
           .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
-        seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+        // Register fadeIn before seekToSynced — a DOMException from a bad
+        // seek must not prevent the fade from running (leaving volume at 0).
         cancelFades.current.push(
           fadeIn(inAudio, musicVolumeRef.current, FADE_MS),
         );
+        try {
+          seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+        } catch (e) {
+          console.warn("[MusicPanel] seekToSynced failed:", e);
+        }
       })
       .catch((e) => {
         console.log(
@@ -686,6 +721,7 @@ export function MusicPanel({ instanceId }: Props) {
 
   function handleCustomSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!customInput.trim()) return;
     const parsed = parseYoutubeLink(customInput);
     if (!parsed) {
       setCustomError(true);
