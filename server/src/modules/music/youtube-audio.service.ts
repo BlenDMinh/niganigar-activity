@@ -201,6 +201,7 @@ export class YoutubeAudioService implements OnModuleInit {
             );
           }
           if (!committed) {
+            stdout.removeListener('readable', onReadable);
             reject(
               new Error(
                 `yt-dlp closed (code ${code}) before producing any data for ${videoId}: ${stderr.slice(0, 500)}`,
@@ -212,11 +213,26 @@ export class YoutubeAudioService implements OnModuleInit {
         });
       });
 
-      stdout.once('readable', () => {
-        if (committed) return;
+      // 'readable' alone is not a reliable "data actually arrived" signal:
+      // Node fires it once more right before 'end' — i.e. a process that
+      // fails instantly and writes zero bytes still triggers it, which
+      // used to make this commit to (and thus stop retrying) a totally
+      // empty attempt. Actually reading a chunk and checking it is
+      // non-null is the only way to tell "real data" from "stream is
+      // ending empty" — confirmed live: this was silently eating every
+      // retry for videos that fail deterministically (immediate 403 on
+      // the only format offered), which is exactly the case retries
+      // exist for. unshift() puts the chunk back so the real .pipe()
+      // consumer downstream still sees every byte.
+      const onReadable = () => {
+        const chunk = stdout.read() as Buffer | null;
+        if (chunk === null) return;
+        stdout.removeListener('readable', onReadable);
         committed = true;
+        stdout.unshift(chunk);
         resolve({ stream: stdout, exitCode });
-      });
+      };
+      stdout.on('readable', onReadable);
     });
   }
 
