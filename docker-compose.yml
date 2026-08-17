@@ -12,8 +12,14 @@ services:
     # limit if passed as an env var (fails with "argument list too long").
     # Must be read-write: yt-dlp rewrites the cookie jar after every run to
     # persist rotated session cookies, and crashes if it can't.
+    #
+    # music-cache is bind-mounted too — without this it lives in the
+    # container's writable layer and gets wiped on every recreate, which
+    # is wasteful given how flaky yt-dlp downloads can be (forces a fresh
+    # re-download of every song after every deploy/restart otherwise).
     volumes:
       - /home/ec2-user/yt-dlp-cookies.txt:/app/yt-dlp-cookies.txt
+      - ./music-cache:/app/music-cache
     restart: unless-stopped
 
   client:
