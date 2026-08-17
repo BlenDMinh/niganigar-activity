@@ -292,6 +292,15 @@ async function fetchAudioBlobUrl(
 
   const estimatedHeader = res.headers.get("X-Estimated-Bytes");
   const estimatedBytes = estimatedHeader ? Number(estimatedHeader) : null;
+  // Content-Type is CORS-safelisted, always readable without needing
+  // Access-Control-Expose-Headers. Must be carried onto the Blob manually
+  // below — res.blob() does this automatically, but reading the stream by
+  // hand does not, and a typeless blob: URL routinely fails to play as
+  // audio/mp4 (m4a) in Chromium-based engines even though the bytes are
+  // fine, throwing NotSupportedError on .play(). webm/opus tracks happen
+  // to still get sniffed correctly without it, which is why this only
+  // ever affected some songs and not others.
+  const mimeType = res.headers.get("Content-Type") || undefined;
 
   if (!res.body) {
     const blob = await res.blob();
@@ -308,7 +317,7 @@ async function fetchAudioBlobUrl(
     received += value.byteLength;
     onProgress(received, estimatedBytes);
   }
-  return URL.createObjectURL(new Blob(chunks));
+  return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
 }
 
 function revokeIfBlobUrl(src: string) {
