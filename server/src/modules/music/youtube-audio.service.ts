@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { Readable } from 'stream';
 
@@ -22,9 +21,12 @@ const MIME_BY_EXT: Record<string, string> = {
 
 // Cloud-provider IP ranges (AWS/GCP/etc.) routinely get YouTube's "Sign in
 // to confirm you're not a bot" anti-bot block. Cookies from an
-// authenticated browser session work around it — see README/deploy notes
-// for how YTDLP_COOKIES_B64 is populated. Written to disk at startup
-// rather than baked into the image, so the secret never lands in a layer.
+// authenticated browser session work around it. The cookies file is
+// expected to be bind-mounted into the container at this path (see
+// docker-compose.yml) rather than passed as an env var — a real cookies
+// file is easily large enough to blow past the OS's combined
+// argument+environment size limit (exec fails with "argument list too
+// long"), so a file mount is the only robust option here.
 const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
 
 // youtubei.js (pure npm) can no longer fetch playable stream URLs for most
@@ -36,13 +38,12 @@ const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
 export class YoutubeAudioService implements OnModuleInit {
   private readonly logger = new Logger(YoutubeAudioService.name);
 
-  async onModuleInit() {
-    const cookiesB64 = process.env.YTDLP_COOKIES_B64;
-    if (!cookiesB64) return;
-    await writeFile(COOKIES_PATH, Buffer.from(cookiesB64, 'base64'), {
-      mode: 0o600,
-    });
-    this.logger.log('yt-dlp cookies file written');
+  onModuleInit() {
+    this.logger.log(
+      existsSync(COOKIES_PATH)
+        ? `yt-dlp cookies file found at ${COOKIES_PATH}`
+        : "no yt-dlp cookies file mounted — requests may hit YouTube's bot check",
+    );
   }
 
   private cookieArgs(): string[] {

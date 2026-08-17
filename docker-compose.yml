@@ -6,7 +6,12 @@ services:
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
       VITE_DISCORD_CLIENT_ID: ${VITE_DISCORD_CLIENT_ID}
       CORS_ORIGIN: https://hopeful-sure-owl.ngrok-free.app
-      YTDLP_COOKIES_B64: ${YTDLP_COOKIES_B64}
+    # yt-dlp cookies, used to get past YouTube's bot-detection block on
+    # cloud IP ranges. Mounted as a file, not an env var — a real cookies
+    # file is large enough to blow past the OS's exec() argument+env size
+    # limit if passed as an env var (fails with "argument list too long").
+    volumes:
+      - /home/ec2-user/yt-dlp-cookies.txt:/app/yt-dlp-cookies.txt:ro
     restart: unless-stopped
 
   client:
