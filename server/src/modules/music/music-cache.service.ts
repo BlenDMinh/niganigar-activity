@@ -94,8 +94,33 @@ export class MusicCacheService implements OnModuleInit {
   // onto this one via getOrFetch() — they just won't get a live stream of
   // their own, they'll wait for the file and read it from disk once ready.
   async streamLive(videoId: string): Promise<LiveStream> {
+    // Register in inflight BEFORE the first await. fetchAudio() takes
+    // several seconds (probe + download start), so without this a second
+    // request arriving during that window sees isDownloading()=false and
+    // launches a duplicate download. Node.js is single-threaded: from here
+    // to the first await there is no yield, so the set below is visible to
+    // any concurrent request that checks after this coroutine suspends.
+    let resolveTask!: (track: CachedTrack) => void;
+    let rejectTask!: (err: unknown) => void;
+    const task = new Promise<CachedTrack>((res, rej) => {
+      resolveTask = res;
+      rejectTask = rej;
+    });
+    const trackedTask = task.finally(() => this.inflight.delete(videoId));
+    // streamLive() itself never awaits `task` (that's the whole point —
+    // it returns the live stream immediately). A rejection with zero
+    // listeners is an unhandled promise rejection, which crashes the
+    // whole Node process by default. This no-op catch is just to satisfy
+    // that — any concurrent getOrFetch() call for the same videoId still
+    // gets the real rejection when *it* awaits this same promise.
+    trackedTask.catch(() => {});
+    this.inflight.set(videoId, trackedTask);
+
     this.logger.log(`Downloading audio for ${videoId}…`);
-    const audio = await this.youtubeAudio.fetchAudio(videoId);
+    const audio = await this.youtubeAudio.fetchAudio(videoId).catch((err) => {
+      rejectTask(err);
+      throw err;
+    });
     this.logger.log(
       `${videoId}: fetchAudio() resolved (mimeType=${audio.mimeType}, durationSeconds=${audio.durationSeconds ?? '(unknown)'}, estimatedBytes=${audio.estimatedBytes ?? '(unknown)'})`,
     );
@@ -112,78 +137,67 @@ export class MusicCacheService implements OnModuleInit {
       bytesSeen += chunk.length;
     });
 
-    const task = new Promise<CachedTrack>((resolve, reject) => {
-      let settled = false;
-      const fail = (err: Error) => {
-        if (settled) return;
-        settled = true;
-        this.logger.error(
-          `${videoId}: streamLive failed after ${bytesSeen} bytes: ${err.message}`,
-        );
-        fileStream.destroy();
-        responseStream.destroy(err);
-        void rm(filePath, { force: true });
-        reject(err);
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      this.logger.error(
+        `${videoId}: streamLive failed after ${bytesSeen} bytes: ${err.message}`,
+      );
+      fileStream.destroy();
+      responseStream.destroy(err);
+      void rm(filePath, { force: true });
+      rejectTask(err);
+    };
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      const meta: CacheMeta = {
+        mimeType: audio.mimeType,
+        durationSeconds: audio.durationSeconds,
+        ext,
       };
-      const succeed = () => {
-        if (settled) return;
-        settled = true;
-        const meta: CacheMeta = {
-          mimeType: audio.mimeType,
-          durationSeconds: audio.durationSeconds,
-          ext,
-        };
-        writeFile(join(CACHE_DIR, `${videoId}.json`), JSON.stringify(meta))
-          .then(() => {
-            this.logger.log(
-              `Cached audio for ${videoId} → ${filePath} (${bytesSeen} bytes)`,
-            );
-            resolve({
-              filePath,
-              mimeType: audio.mimeType,
-              durationSeconds: audio.durationSeconds,
-            });
-          })
-          .catch(fail);
-      };
+      writeFile(join(CACHE_DIR, `${videoId}.json`), JSON.stringify(meta))
+        .then(() => {
+          this.logger.log(
+            `Cached audio for ${videoId} → ${filePath} (${bytesSeen} bytes)`,
+          );
+          resolveTask({
+            filePath,
+            mimeType: audio.mimeType,
+            durationSeconds: audio.durationSeconds,
+          });
+        })
+        .catch(fail);
+    };
 
-      audio.stream.on('error', (err: Error) => {
-        this.logger.error(`${videoId}: audio.stream errored: ${err.message}`);
-        fail(err);
-      });
-      fileStream.on('error', (err: Error) => {
-        this.logger.error(`${videoId}: fileStream errored: ${err.message}`);
-        fail(err);
-      });
-      // A failed yt-dlp process still ends its stdout "cleanly" as far as
-      // the pipe is concerned — fileStream.finish() fires the same way it
-      // would for a real success (Node fires stdout's 'end' before the
-      // process 'close' event, so there's no way to catch this via stream
-      // errors alone). Only trust it once we've also confirmed the
-      // process actually exited 0.
-      fileStream.on('finish', () => {
-        this.logger.log(
-          `${videoId}: fileStream finished (${bytesSeen} bytes written), awaiting exit code`,
-        );
-        void audio.exitCode.then((code) => {
-          this.logger.log(`${videoId}: yt-dlp exit code = ${code}`);
-          if (code !== 0) {
-            fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
-            return;
-          }
-          succeed();
-        });
+    audio.stream.on('error', (err: Error) => {
+      this.logger.error(`${videoId}: audio.stream errored: ${err.message}`);
+      fail(err);
+    });
+    fileStream.on('error', (err: Error) => {
+      this.logger.error(`${videoId}: fileStream errored: ${err.message}`);
+      fail(err);
+    });
+    // A failed yt-dlp process still ends its stdout "cleanly" as far as
+    // the pipe is concerned — fileStream.finish() fires the same way it
+    // would for a real success (Node fires stdout's 'end' before the
+    // process 'close' event, so there's no way to catch this via stream
+    // errors alone). Only trust it once we've also confirmed the
+    // process actually exited 0.
+    fileStream.on('finish', () => {
+      this.logger.log(
+        `${videoId}: fileStream finished (${bytesSeen} bytes written), awaiting exit code`,
+      );
+      void audio.exitCode.then((code) => {
+        this.logger.log(`${videoId}: yt-dlp exit code = ${code}`);
+        if (code !== 0) {
+          fail(new Error(`yt-dlp exited ${code} for ${videoId}`));
+          return;
+        }
+        succeed();
       });
     });
-    const trackedTask = task.finally(() => this.inflight.delete(videoId));
-    // streamLive() itself never awaits `task` (that's the whole point —
-    // it returns the live stream immediately). A rejection with zero
-    // listeners is an unhandled promise rejection, which crashes the
-    // whole Node process by default. This no-op catch is just to satisfy
-    // that — any concurrent getOrFetch() call for the same videoId still
-    // gets the real rejection when *it* awaits this same promise.
-    trackedTask.catch(() => {});
-    this.inflight.set(videoId, trackedTask);
 
     return {
       stream: responseStream,
