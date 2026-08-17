@@ -59,7 +59,7 @@ export class YoutubeAudioService implements OnModuleInit {
       'yt-dlp',
       [
         '-f',
-        'bestaudio',
+        'bestaudio/best',
         '--no-playlist',
         '--no-warnings',
         ...this.cookieArgs(),
@@ -95,7 +95,7 @@ export class YoutubeAudioService implements OnModuleInit {
     return new Promise((resolve, reject) => {
       const child = spawn('yt-dlp', [
         '-f',
-        'bestaudio',
+        'bestaudio/best',
         '--no-playlist',
         '--skip-download',
         '--no-warnings',
