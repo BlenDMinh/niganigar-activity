@@ -35,6 +35,7 @@ export class MusicController {
     @Param('videoId') videoId: string,
     @Query('custom') customParam: string | undefined,
     @Headers('range') range: string | undefined,
+    @Headers('if-none-match') ifNoneMatch: string | undefined,
     @Res() res: Response,
   ) {
     this.logger.log(
@@ -59,7 +60,7 @@ export class MusicController {
       this.logger.log(
         `${videoId}: serving from disk cache (${cached.filePath})`,
       );
-      this.serveCached(cached, range, res);
+      this.serveCached(cached, range, ifNoneMatch, res);
       return;
     }
     this.logger.log(`${videoId}: no disk cache`);
@@ -72,7 +73,7 @@ export class MusicController {
       this.logger.log(`${videoId}: already in flight, waiting on it`);
       const track = await this.musicCache.getOrFetch(videoId);
       this.logger.log(`${videoId}: in-flight download finished, serving`);
-      this.serveCached(track, undefined, res);
+      this.serveCached(track, undefined, ifNoneMatch, res);
       return;
     }
 
@@ -103,13 +104,34 @@ export class MusicController {
   private serveCached(
     track: CachedTrack,
     range: string | undefined,
+    ifNoneMatch: string | undefined,
     res: Response,
   ) {
-    const { size } = statSync(track.filePath);
+    const { size, mtimeMs } = statSync(track.filePath);
+    // Weak ETag off size+mtime — cheap (no hashing the file), and changes
+    // whenever we re-download this videoId (e.g. after clearing a corrupt
+    // cache entry), which `immutable, max-age=604800` alone could not: a
+    // browser that had already cached the old (possibly bad) response
+    // would trust it blindly for the full week and never even ask again,
+    // regardless of what the server-side cache now holds. Confirmed live —
+    // a stale browser cache kept "playing" a corrupt file after the whole
+    // server-side cache directory had already been wiped.
+    const etag = `W/"${size}-${Math.round(mtimeMs)}"`;
 
     res.setHeader('Content-Type', track.mimeType);
     res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    // "no-cache" is misleadingly named — it does NOT disable caching, it
+    // means "you may reuse the cached body, but only after revalidating
+    // with the server first (via If-None-Match)". A fresh max-age entry
+    // would let the browser skip the network entirely, ETag or not, so
+    // that's what actually needs to change here, not just adding ETag.
+    res.setHeader('Cache-Control', 'public, no-cache');
+    res.setHeader('ETag', etag);
+
+    if (ifNoneMatch === etag) {
+      res.status(304).end();
+      return;
+    }
 
     const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range) : null;
     if (!match) {

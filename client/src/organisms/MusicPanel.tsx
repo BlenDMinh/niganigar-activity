@@ -265,8 +265,22 @@ const DRIFT_CHECK_MS = 20000;
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL as string;
 
+// Bump this whenever a fix could mean previously-served audio bytes for an
+// unchanged videoId are no longer trustworthy (e.g. the 2026-08-17 fix for
+// a retry-logic bug that could leave a corrupt file cached server-side).
+// The server's Cache-Control now forces revalidation on every request
+// going forward, but that can't retroactively un-cache a response a
+// client's browser already stored under the *old* `immutable, max-age`
+// header from before this shipped — those are stuck for up to 7 days
+// unless the URL itself changes. Confirmed live: clearing the server-side
+// cache directory did not stop a browser from still "playing" a corrupt
+// cached file.
+const CACHE_BUST_VERSION = 1;
+
 function audioUrl(youtubeId: string, isCustom: boolean): string {
-  return `${SERVER_URL}/api/music/audio/${youtubeId}${isCustom ? "?custom=1" : ""}`;
+  const params = new URLSearchParams({ v: String(CACHE_BUST_VERSION) });
+  if (isCustom) params.set("custom", "1");
+  return `${SERVER_URL}/api/music/audio/${youtubeId}?${params.toString()}`;
 }
 
 // Discord's Activity CSP restricts `media-src` to 'self'/blob:/data: — an
