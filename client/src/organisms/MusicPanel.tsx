@@ -269,6 +269,22 @@ function audioUrl(youtubeId: string): string {
   return `${SERVER_URL}/api/music/audio/${youtubeId}`;
 }
 
+// Discord's Activity CSP restricts `media-src` to 'self'/blob:/data: — an
+// <audio src> pointed straight at our (cross-origin) server gets silently
+// blocked. fetch() is governed by connect-src instead (which does allow
+// our origin), so we pull the bytes ourselves and hand the element a
+// blob: URL, which the CSP explicitly permits.
+async function fetchAudioBlobUrl(youtubeId: string): Promise<string> {
+  const res = await fetch(audioUrl(youtubeId));
+  if (!res.ok) throw new Error(`audio fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+function revokeIfBlobUrl(src: string) {
+  if (src.startsWith("blob:")) URL.revokeObjectURL(src);
+}
+
 // Position `audio` should be at right now, given when the track started
 // and how far into it playback should always begin — the track loops
 // within [offsetSeconds, duration) rather than replaying the skipped part
@@ -351,7 +367,6 @@ export function MusicPanel({ instanceId }: Props) {
     cancelFades.current = [];
 
     if (!activeYoutubeId) return;
-    const src = audioUrl(activeYoutubeId);
 
     const elA = audioA.current;
     const elB = audioB.current;
@@ -370,32 +385,47 @@ export function MusicPanel({ instanceId }: Props) {
     // Keep activeSlot in sync for the volume-slider effect.
     activeSlot.current = inAudio === elA ? "a" : "b";
 
-    if (outAudio === null) {
-      // Nothing audibly playing yet — start immediately (first load / after silence).
-      inAudio.src = src;
-      inAudio.loop = true;
-      inAudio.volume = musicVolumeRef.current;
-      void inAudio
-        .play()
-        .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
-      seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
-      return;
-    }
+    let cancelled = false;
 
-    // Equal-power crossfade.
-    cancelFades.current.push(
-      fadeOut(outAudio, FADE_MS, () => outAudio.pause()),
-    );
-    inAudio.src = src;
-    inAudio.loop = true;
-    inAudio.volume = 0;
-    void inAudio
-      .play()
-      .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
-    seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
-    cancelFades.current.push(fadeIn(inAudio, musicVolumeRef.current, FADE_MS));
+    void fetchAudioBlobUrl(activeYoutubeId)
+      .then((blobUrl) => {
+        if (cancelled) {
+          URL.revokeObjectURL(blobUrl);
+          return;
+        }
+        revokeIfBlobUrl(inAudio.src);
+
+        if (outAudio === null) {
+          // Nothing audibly playing yet — start immediately (first load / after silence).
+          inAudio.src = blobUrl;
+          inAudio.loop = true;
+          inAudio.volume = musicVolumeRef.current;
+          void inAudio
+            .play()
+            .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
+          seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+          return;
+        }
+
+        // Equal-power crossfade.
+        cancelFades.current.push(
+          fadeOut(outAudio, FADE_MS, () => outAudio.pause()),
+        );
+        inAudio.src = blobUrl;
+        inAudio.loop = true;
+        inAudio.volume = 0;
+        void inAudio
+          .play()
+          .catch((e) => console.warn("[MusicPanel] autoplay blocked:", e));
+        seekToSynced(inAudio, musicStartedAt, activeOffsetSeconds);
+        cancelFades.current.push(
+          fadeIn(inAudio, musicVolumeRef.current, FADE_MS),
+        );
+      })
+      .catch((e) => console.warn("[MusicPanel] failed to load audio:", e));
 
     return () => {
+      cancelled = true;
       cancelFades.current.forEach((f) => f());
       cancelFades.current = [];
     };
@@ -433,6 +463,8 @@ export function MusicPanel({ instanceId }: Props) {
     return () => {
       audioA.current.pause();
       audioB.current.pause();
+      revokeIfBlobUrl(audioA.current.src);
+      revokeIfBlobUrl(audioB.current.src);
     };
   }, []);
 
