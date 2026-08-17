@@ -6,6 +6,10 @@
 # downloaded/cached audio for the music player
 /music-cache
 
+# yt-dlp cookie file, written at runtime from YTDLP_COOKIES_B64 — never
+# meant to be baked into the image or committed
+yt-dlp-cookies.txt
+
 # Logs
 logs
 *.log

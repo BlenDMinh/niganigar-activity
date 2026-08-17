@@ -1,5 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
 import { Readable } from 'stream';
 
 export interface ResolvedAudio {
@@ -17,14 +20,34 @@ const MIME_BY_EXT: Record<string, string> = {
   mp3: 'audio/mpeg',
 };
 
+// Cloud-provider IP ranges (AWS/GCP/etc.) routinely get YouTube's "Sign in
+// to confirm you're not a bot" anti-bot block. Cookies from an
+// authenticated browser session work around it — see README/deploy notes
+// for how YTDLP_COOKIES_B64 is populated. Written to disk at startup
+// rather than baked into the image, so the secret never lands in a layer.
+const COOKIES_PATH = join(process.cwd(), 'yt-dlp-cookies.txt');
+
 // youtubei.js (pure npm) can no longer fetch playable stream URLs for most
 // videos without solving YouTube's PO-token anti-bot challenge, which in
 // practice requires a headless browser. yt-dlp ships its own actively
 // maintained PO-token handling, so we shell out to it instead — see
 // server/Dockerfile for the binary install.
 @Injectable()
-export class YoutubeAudioService {
+export class YoutubeAudioService implements OnModuleInit {
   private readonly logger = new Logger(YoutubeAudioService.name);
+
+  async onModuleInit() {
+    const cookiesB64 = process.env.YTDLP_COOKIES_B64;
+    if (!cookiesB64) return;
+    await writeFile(COOKIES_PATH, Buffer.from(cookiesB64, 'base64'), {
+      mode: 0o600,
+    });
+    this.logger.log('yt-dlp cookies file written');
+  }
+
+  private cookieArgs(): string[] {
+    return existsSync(COOKIES_PATH) ? ['--cookies', COOKIES_PATH] : [];
+  }
 
   async fetchAudio(videoId: string): Promise<ResolvedAudio> {
     const url = `https://www.youtube.com/watch?v=${videoId}`;
@@ -33,7 +56,16 @@ export class YoutubeAudioService {
 
     const child = spawn(
       'yt-dlp',
-      ['-f', 'bestaudio', '--no-playlist', '--no-warnings', '-o', '-', url],
+      [
+        '-f',
+        'bestaudio',
+        '--no-playlist',
+        '--no-warnings',
+        ...this.cookieArgs(),
+        '-o',
+        '-',
+        url,
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
 
@@ -66,6 +98,7 @@ export class YoutubeAudioService {
         '--no-playlist',
         '--skip-download',
         '--no-warnings',
+        ...this.cookieArgs(),
         '--print',
         '%(duration)s\t%(ext)s',
         url,

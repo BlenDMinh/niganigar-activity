@@ -6,6 +6,7 @@ services:
       DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
       VITE_DISCORD_CLIENT_ID: ${VITE_DISCORD_CLIENT_ID}
       CORS_ORIGIN: https://hopeful-sure-owl.ngrok-free.app
+      YTDLP_COOKIES_B64: ${YTDLP_COOKIES_B64}
     restart: unless-stopped
 
   client:
