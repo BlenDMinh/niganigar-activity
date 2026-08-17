@@ -10,8 +10,10 @@ services:
     # cloud IP ranges. Mounted as a file, not an env var — a real cookies
     # file is large enough to blow past the OS's exec() argument+env size
     # limit if passed as an env var (fails with "argument list too long").
+    # Must be read-write: yt-dlp rewrites the cookie jar after every run to
+    # persist rotated session cookies, and crashes if it can't.
     volumes:
-      - /home/ec2-user/yt-dlp-cookies.txt:/app/yt-dlp-cookies.txt:ro
+      - /home/ec2-user/yt-dlp-cookies.txt:/app/yt-dlp-cookies.txt
     restart: unless-stopped
 
   client:
