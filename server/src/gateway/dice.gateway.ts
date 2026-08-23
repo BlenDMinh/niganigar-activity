@@ -19,6 +19,13 @@ type TypedSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 const VIDEO_ID_RE = /^[a-zA-Z0-9_-]{11}$/;
 
+// reveal3 clips are 24fps — the client's own dramatic-reveal moment lands
+// at frame 40 (see client/src/utils/rollAnimations.ts). The numeric result
+// (roll_revealed — history/toast) is held back until that same moment so
+// nobody in the room sees the number before the video itself reveals it,
+// whether or not they're the one watching it play out.
+const REVEAL3_FRAME40_MS = Math.round((40 / 24) * 1000);
+
 @WebSocketGateway({ cors: { origin: '*' } })
 export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -302,20 +309,32 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const watcherIds = Array.from(pending.watcherIds);
 
-    this.logger.log(
-      `roll_tap: ${user.username} reveals ${pending.dice} → ${pending.total}` +
-        (pending.isHidden
-          ? ' [hidden, not stored]'
-          : ` (broadcasting to ${watcherIds.length} watcher(s))`),
-    );
+    const announce = () => {
+      this.logger.log(
+        `roll_tap: ${user.username} reveals ${pending.dice} → ${pending.total}` +
+          (pending.isHidden
+            ? ' [hidden, not stored]'
+            : ` (broadcasting to ${watcherIds.length} watcher(s))`),
+      );
 
-    if (pending.isHidden) {
-      socket.emit('roll_revealed', { entry, watcherIds });
+      if (pending.isHidden) {
+        socket.emit('roll_revealed', { entry, watcherIds });
+      } else {
+        session.rollHistory.push(entry);
+        this.server
+          .to(payload.instanceId)
+          .emit('roll_revealed', { entry, watcherIds });
+      }
+    };
+
+    // frame40 already true means this tap itself skipped straight to
+    // frame 40 (the video is already at the reveal moment) — announce
+    // right away. Otherwise the clip is starting from 0, so hold the
+    // number back until it would naturally reach frame 40.
+    if (frame40) {
+      announce();
     } else {
-      session.rollHistory.push(entry);
-      this.server
-        .to(payload.instanceId)
-        .emit('roll_revealed', { entry, watcherIds });
+      setTimeout(announce, REVEAL3_FRAME40_MS);
     }
   }
 

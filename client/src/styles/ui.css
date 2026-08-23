@@ -83,10 +83,10 @@
   display: block;
 }
 
-/* Static background.png shown over the (still-mounted, just hidden)
-   video element — while awaiting the next tap, and as one of the two
-   crossfading layers during reveal3's rasterize-to-background transition. */
-.roll-static-overlay {
+/* Every roll-sequence layer (both video slots, the static background,
+   the rasterize canvas) stacks absolutely inside .bg-parallax so they
+   can crossfade via opacity instead of mounting/unmounting. */
+.stage-layer {
   position: absolute;
   inset: 0;
 }
@@ -128,6 +128,7 @@
 }
 
 .bg-parallax {
+  position: relative;
   width: 100%;
   height: 100%;
 }
@@ -329,6 +330,96 @@
   letter-spacing: -0.02em;
   min-width: 30px;
   text-align: right;
+}
+
+/* ─── Big roll reveal (center-screen, auto-dismiss) ──────────── */
+.big-reveal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 15;
+}
+
+.big-reveal__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 26px 56px 32px;
+  border-radius: var(--r);
+  background: var(--bg-deep);
+  border: 1px solid var(--border-2);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.big-reveal__card--gold {
+  border-color: rgba(255, 200, 60, 0.4);
+}
+.big-reveal__card--red {
+  border-color: rgba(255, 80, 80, 0.4);
+}
+
+.big-reveal__banner {
+  font-family: "Bonescript", serif;
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.big-reveal__card--gold .big-reveal__banner {
+  color: #ffd76a;
+  text-shadow: 0 0 18px rgba(255, 200, 60, 0.65);
+}
+.big-reveal__card--red .big-reveal__banner {
+  color: #ff6b6b;
+  text-shadow: 0 0 18px rgba(255, 50, 50, 0.55);
+}
+
+.big-reveal__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.big-reveal__name {
+  font-weight: 600;
+  color: var(--text);
+}
+.big-reveal__dice {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.big-reveal__total {
+  font-family: "Bonescript", serif;
+  font-size: 108px;
+  line-height: 1;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
+}
+.big-reveal__card--gold .big-reveal__total {
+  color: #ffd76a;
+  text-shadow:
+    0 0 40px rgba(255, 200, 60, 0.55),
+    0 4px 30px rgba(0, 0, 0, 0.6);
+}
+.big-reveal__card--red .big-reveal__total {
+  color: #ff8080;
+  text-shadow:
+    0 0 40px rgba(255, 50, 50, 0.45),
+    0 4px 30px rgba(0, 0, 0, 0.6);
+}
+
+.big-reveal__pips {
+  display: flex;
+  gap: 5px;
+  margin-top: 4px;
 }
 
 /* ─── Log button (top-right) ─────────────────────────────────── */

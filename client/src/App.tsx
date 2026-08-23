@@ -5,6 +5,7 @@ import { getSocket } from "./socket/client";
 import { StoreProvider, useStore } from "./state/store";
 import { PlayerBar } from "./organisms/PlayerBar";
 import { RollToast } from "./organisms/RollToast";
+import { BigRollReveal } from "./organisms/BigRollReveal";
 import { RollLogModal } from "./organisms/RollLogModal";
 import { DiceMenu } from "./organisms/DiceMenu";
 import { MusicPanel } from "./organisms/MusicPanel";
@@ -72,7 +73,21 @@ function ActivityApp() {
   const [bgFadeIn, setBgFadeIn] = useState(0);
   const [joinPrompt, setJoinPrompt] = useState<JoinPrompt | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  // Two <video> elements, ping-ponged — the next stage's clip loads and
+  // decodes its first frame into the INACTIVE slot while the current one
+  // stays visible, then we swap opacity. Setting .src on a single visible
+  // element causes a black-frame flash for the gap between load() clearing
+  // the picture and the new source's first frame decoding.
+  const videoARef = useRef<HTMLVideoElement>(null);
+  const videoBRef = useRef<HTMLVideoElement>(null);
+  const [activeSlot, setActiveSlot] = useState<"a" | "b">("a");
+  const activeSlotRef = useRef<"a" | "b">("a");
+  // The video element representing "the current stage's clip" from the
+  // game-logic's point of view — set synchronously the instant a new stage
+  // starts, decoupled from activeSlot (which only flips once the new
+  // slot's first frame is actually ready to show). Read by wasInterrupted
+  // and the rasterize snapshot; never read during render.
+  const currentVideoRef = useRef<HTMLVideoElement | null>(null);
   const sequenceAudioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Tracks which rollId the current user is watching (as roller or
@@ -89,7 +104,12 @@ function ActivityApp() {
     setWatchedRollIdState(id);
   }, []);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rasterizeStartedRef = useRef(false);
+  // Bumped by startRasterizeTransition (new run) and enterRolling
+  // (invalidate any older run outright) — the running rAF loop checks this
+  // on every frame and quietly stops if it's no longer the current run, so
+  // a new roll starting mid-transition can't have its background/watching
+  // state clobbered by the previous roll's rasterize loop finishing late.
+  const rasterizeRunIdRef = useRef(0);
   const woodHitRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -125,36 +145,55 @@ function ActivityApp() {
   // Starts a stage's video+audio together from `startTime` (default 0).
   // Always hard-cuts whatever was previously playing — a tap (or an
   // incoming roll_advance) never waits for the current clip to finish.
+  // `onEnded` is attached directly to this specific video element instance
+  // (rather than via a reactive effect keyed on phase), so it's never at
+  // risk of racing the ping-pong slot swap below.
   const playSequenceStage = useCallback(
-    (videoSrc: string, audioSrc: string, startTime = 0) => {
+    (videoSrc: string, audioSrc: string, startTime = 0, onEnded?: () => void) => {
       setStageVideoEnded(false);
-      const video = videoRef.current;
+
+      const prevSlot = activeSlotRef.current;
+      const nextSlot: "a" | "b" = prevSlot === "a" ? "b" : "a";
+      const prevVideo = (prevSlot === "a" ? videoARef : videoBRef).current;
+      const nextVideo = (nextSlot === "a" ? videoARef : videoBRef).current;
       const audio = sequenceAudioRef.current;
 
-      const applyAndPlay = (el: HTMLMediaElement) => {
-        if (startTime > 0) {
-          const seek = () => {
-            el.currentTime = startTime;
-            void el.play().catch(() => {});
-          };
-          if (el.readyState >= 1) seek();
-          else el.addEventListener("loadedmetadata", seek, { once: true });
-        } else {
-          void el.play().catch(() => {});
-        }
-      };
+      if (nextVideo) {
+        currentVideoRef.current = nextVideo;
+        nextVideo.pause();
+        nextVideo.src = videoSrc;
+        nextVideo.load();
 
-      if (video) {
-        video.pause();
-        video.src = videoSrc;
-        video.load();
-        applyAndPlay(video);
+        if (onEnded) {
+          nextVideo.addEventListener("ended", onEnded, { once: true });
+        }
+
+        // Only swap visibility once the new slot actually has a frame to
+        // paint — this is what avoids the black-flash.
+        const showAndPlay = () => {
+          if (startTime > 0) nextVideo.currentTime = startTime;
+          void nextVideo.play().catch(() => {});
+          activeSlotRef.current = nextSlot;
+          setActiveSlot(nextSlot);
+          if (prevVideo && prevVideo !== nextVideo) prevVideo.pause();
+        };
+        nextVideo.addEventListener("loadeddata", showAndPlay, { once: true });
       }
+
       if (audio) {
         audio.pause();
         audio.src = audioSrc;
         audio.load();
-        applyAndPlay(audio);
+        if (startTime > 0) {
+          const seek = () => {
+            audio.currentTime = startTime;
+            void audio.play().catch(() => {});
+          };
+          if (audio.readyState >= 1) seek();
+          else audio.addEventListener("loadedmetadata", seek, { once: true });
+        } else {
+          void audio.play().catch(() => {});
+        }
       }
     },
     [],
@@ -168,25 +207,31 @@ function ActivityApp() {
       clearTimeout(revealTimerRef.current);
       revealTimerRef.current = null;
     }
-    rasterizeStartedRef.current = true;
+    rasterizeRunIdRef.current += 1;
     setTransitioning(false);
     setBgFadeIn(0);
     setVideoPhase("rolling");
     setRevealVariant(null);
-    playSequenceStage(ROLLING_VIDEO, ROLLING_AUDIO);
+    playSequenceStage(ROLLING_VIDEO, ROLLING_AUDIO, 0, () =>
+      setVideoPhase("dice-ready"),
+    );
   }, [playSequenceStage]);
 
   const enterReveal1 = useCallback(() => {
     setVideoPhase("reveal1");
     setRevealVariant(null);
-    playSequenceStage(REVEAL1_VIDEO, REVEAL1_AUDIO);
+    playSequenceStage(REVEAL1_VIDEO, REVEAL1_AUDIO, 0, () =>
+      setStageVideoEnded(true),
+    );
   }, [playSequenceStage]);
 
   const enterReveal2 = useCallback(
     (variant: "normal" | "gold" | "red") => {
       setVideoPhase("reveal2");
       setRevealVariant(variant);
-      playSequenceStage(REVEAL2_VIDEO[variant], REVEAL2_AUDIO[variant]);
+      playSequenceStage(REVEAL2_VIDEO[variant], REVEAL2_AUDIO[variant], 0, () =>
+        setStageVideoEnded(true),
+      );
     },
     [playSequenceStage],
   );
@@ -197,14 +242,15 @@ function ActivityApp() {
   // resolution (blown back up with smoothing off, so it reads as
   // pixelation) while crossfading in the plain background image.
   const startRasterizeTransition = useCallback(() => {
-    if (rasterizeStartedRef.current) return;
-    rasterizeStartedRef.current = true;
     if (revealTimerRef.current) {
       clearTimeout(revealTimerRef.current);
       revealTimerRef.current = null;
     }
+    const runId = (rasterizeRunIdRef.current += 1);
+    const isCurrent = () => rasterizeRunIdRef.current === runId;
 
     const finish = () => {
+      if (!isCurrent()) return;
       setTransitioning(false);
       setBgFadeIn(0);
       setVideoPhase("background");
@@ -213,7 +259,7 @@ function ActivityApp() {
       setClickCount(0);
     };
 
-    const video = videoRef.current;
+    const video = currentVideoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.videoWidth === 0) {
       finish();
@@ -250,6 +296,7 @@ function ActivityApp() {
     const start = performance.now();
 
     const step = (now: number) => {
+      if (!isCurrent()) return;
       const t = Math.min(1, (now - start) / DURATION_MS);
       const blockSize = 1 + t * (MAX_BLOCK - 1);
       const smallW = Math.max(1, Math.floor(w / blockSize));
@@ -276,13 +323,13 @@ function ActivityApp() {
 
   const enterReveal3 = useCallback(
     (variant: RevealVariant, frame40: boolean) => {
-      rasterizeStartedRef.current = false;
       setVideoPhase("reveal3");
       setRevealVariant(variant);
       playSequenceStage(
         REVEAL3_VIDEO[variant],
         REVEAL3_AUDIO[variant],
         frame40 ? REVEAL3_SKIP_TIME : 0,
+        () => startRasterizeTransition(),
       );
 
       // Safety net in case 'ended' never fires (e.g. autoplay blocked and
@@ -295,32 +342,6 @@ function ActivityApp() {
     },
     [playSequenceStage, startRasterizeTransition],
   );
-
-  // The rolling clip is the only stage that auto-advances on its own
-  // (-> the static "awaiting taps" background). reveal1/reveal2 settle on
-  // the same static background if their clip finishes before the next tap
-  // arrives, but stay on their own phase (still awaiting a tap). reveal3
-  // dissolves into the background via the rasterize transition above.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (videoPhase === "rolling") {
-      const onEnded = () => setVideoPhase("dice-ready");
-      video.addEventListener("ended", onEnded);
-      return () => video.removeEventListener("ended", onEnded);
-    }
-    if (videoPhase === "reveal1" || videoPhase === "reveal2") {
-      const onEnded = () => setStageVideoEnded(true);
-      video.addEventListener("ended", onEnded);
-      return () => video.removeEventListener("ended", onEnded);
-    }
-    if (videoPhase === "reveal3") {
-      const onEnded = () => startRasterizeTransition();
-      video.addEventListener("ended", onEnded);
-      return () => video.removeEventListener("ended", onEnded);
-    }
-  }, [videoPhase, startRasterizeTransition]);
 
   // Tap-to-reveal: only the roller can tap, and only while a stage that
   // accepts a tap is showing. The server decides what happens next (it
@@ -346,8 +367,8 @@ function ActivityApp() {
 
     const wasInterrupted =
       videoPhase !== "dice-ready" &&
-      !!videoRef.current &&
-      !videoRef.current.ended;
+      !!currentVideoRef.current &&
+      !currentVideoRef.current.ended;
 
     setClickCount((c) => Math.min(c + 1, 3));
     getSocket().emit("roll_tap", {
@@ -596,72 +617,85 @@ function ActivityApp() {
         className={`video-stage${isClickable ? " video-stage--clickable" : ""}${revealVariant ? ` video-stage--${revealVariant}` : ""}`}
         onClick={handleVideoClick}
       >
-        {/* Always mounted (even during "background", fully transparent)
-            so videoRef/sequenceAudioRef are never null the instant a roll
-            starts — playSequenceStage runs imperatively, synchronously
-            with the phase-change call, not from an effect that would wait
-            for a fresh mount. */}
-        <video
-          ref={videoRef}
-          className="video-stage__video"
-          autoPlay
-          playsInline
-          style={
-            videoPhase === "background" || transitioning
-              ? { opacity: 0 }
-              : undefined
-          }
-        />
-        <audio ref={sequenceAudioRef} />
-
-        {videoPhase === "background" && (
-          <motion.div
-            className="bg-ambient"
-            animate={{ x: [0, 8, -5, 4, 0], y: [0, -6, 8, -4, 0] }}
-            transition={{
-              duration: 30,
-              repeat: Infinity,
-              ease: "easeInOut",
-              times: [0, 0.25, 0.5, 0.75, 1],
-            }}
-          >
-            <motion.div className="bg-parallax" style={{ x: bgX, y: bgY }}>
-              <img
-                src={BACKGROUND_IMAGE}
-                className="bg-image"
-                alt=""
-                draggable={false}
-              />
-            </motion.div>
-          </motion.div>
-        )}
-        {(videoPhase === "dice-ready" ||
-          ((videoPhase === "reveal1" || videoPhase === "reveal2") &&
-            stageVideoEnded)) &&
-          !transitioning && (
+        {/* The same ambient drift + mouse-parallax wrapper covers every
+            phase now, not just the idle background — the video should
+            feel like part of the same living background, not a flat
+            cutaway. Every layer inside is always mounted (just opacity-0
+            when inactive): playSequenceStage/startRasterizeTransition run
+            imperatively via refs, synchronously with the phase-change
+            call, not from an effect that would wait for a fresh mount. */}
+        <motion.div
+          className="bg-ambient"
+          animate={{ x: [0, 8, -5, 4, 0], y: [0, -6, 8, -4, 0] }}
+          transition={{
+            duration: 30,
+            repeat: Infinity,
+            ease: "easeInOut",
+            times: [0, 0.25, 0.5, 0.75, 1],
+          }}
+        >
+          <motion.div className="bg-parallax" style={{ x: bgX, y: bgY }}>
             <img
               src={BACKGROUND_IMAGE}
-              className="bg-image roll-static-overlay"
+              className="bg-image stage-layer"
               alt=""
               draggable={false}
+              style={{ opacity: videoPhase === "background" ? 1 : 0 }}
             />
-          )}
-        {transitioning && (
-          <>
+            <video
+              ref={videoARef}
+              className="video-stage__video stage-layer"
+              autoPlay
+              playsInline
+              style={{
+                opacity:
+                  videoPhase !== "background" &&
+                  !transitioning &&
+                  activeSlot === "a"
+                    ? 1
+                    : 0,
+              }}
+            />
+            <video
+              ref={videoBRef}
+              className="video-stage__video stage-layer"
+              autoPlay
+              playsInline
+              style={{
+                opacity:
+                  videoPhase !== "background" &&
+                  !transitioning &&
+                  activeSlot === "b"
+                    ? 1
+                    : 0,
+              }}
+            />
+            {(videoPhase === "dice-ready" ||
+              ((videoPhase === "reveal1" || videoPhase === "reveal2") &&
+                stageVideoEnded)) &&
+              !transitioning && (
+                <img
+                  src={BACKGROUND_IMAGE}
+                  className="bg-image stage-layer"
+                  alt=""
+                  draggable={false}
+                />
+              )}
             <img
               src={BACKGROUND_IMAGE}
-              className="bg-image roll-static-overlay"
+              className="bg-image stage-layer"
               alt=""
               draggable={false}
-              style={{ opacity: bgFadeIn }}
+              style={{ opacity: transitioning ? bgFadeIn : 0 }}
             />
             <canvas
               ref={canvasRef}
-              className="video-stage__video roll-static-overlay"
-              style={{ opacity: 1 - bgFadeIn }}
+              className="video-stage__video stage-layer"
+              style={{ opacity: transitioning ? 1 - bgFadeIn : 0 }}
             />
-          </>
-        )}
+          </motion.div>
+        </motion.div>
+        <audio ref={sequenceAudioRef} />
 
         {/* Tap-to-reveal overlay — shown only to the roller */}
         <AnimatePresence>
@@ -691,6 +725,9 @@ function ActivityApp() {
 
         {/* Bottom-center: roll results popup (auto-dismiss, no log button) */}
         <RollToast />
+
+        {/* Center-screen: the same reveal, big and hard to miss */}
+        <BigRollReveal />
 
         {/* Top-right: persistent log button */}
         <motion.button
