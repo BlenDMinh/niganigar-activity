@@ -83,6 +83,42 @@
   display: block;
 }
 
+/* Static background.png shown over the (still-mounted, just hidden)
+   video element — while awaiting the next tap, and as one of the two
+   crossfading layers during reveal3's rasterize-to-background transition. */
+.roll-static-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+/* Reveal-stage color tease — a subtle vignette hinting at the outcome
+   before the numeric result shows up in the toast. */
+.video-stage--gold::after,
+.video-stage--red::after,
+.video-stage--red-fake::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 0.25s ease;
+}
+.video-stage--gold::after {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 200, 60, 0.16) 0%,
+    transparent 65%
+  );
+}
+.video-stage--red::after,
+.video-stage--red-fake::after {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 50, 50, 0.16) 0%,
+    transparent 65%
+  );
+}
+
 /* ─── Static background (parallax + ambient drift) ───────────── */
 .bg-ambient {
   position: absolute;

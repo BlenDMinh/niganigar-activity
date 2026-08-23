@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { DiscordSDK, patchUrlMappings } from "@discord/embedded-app-sdk";
-import {
-  AnimatePresence,
-  motion,
-  useAnimate,
-  useMotionValue,
-  useSpring,
-} from "motion/react";
+import { AnimatePresence, motion, useMotionValue, useSpring } from "motion/react";
 import { getSocket } from "./socket/client";
 import { StoreProvider, useStore } from "./state/store";
 import { PlayerBar } from "./organisms/PlayerBar";
@@ -15,10 +9,35 @@ import { RollLogModal } from "./organisms/RollLogModal";
 import { DiceMenu } from "./organisms/DiceMenu";
 import { MusicPanel } from "./organisms/MusicPanel";
 import { TapIndicator } from "./atoms/TapIndicator";
-import type { RollEntry } from "./types";
+import {
+  BACKGROUND_IMAGE,
+  ROLLING_VIDEO,
+  ROLLING_AUDIO,
+  REVEAL1_VIDEO,
+  REVEAL1_AUDIO,
+  REVEAL2_VIDEO,
+  REVEAL2_AUDIO,
+  REVEAL3_VIDEO,
+  REVEAL3_AUDIO,
+  REVEAL3_SKIP_TIME,
+  preloadRollAssets,
+  type RevealVariant,
+} from "./utils/rollAnimations";
 import "./styles/ui.css";
 
-type VideoPhase = "background" | "dice-ready" | "reveal" | "reveal-critical";
+// The 3-tap reveal drives one <video> + one <audio> element through this
+// sequence: background -> rolling (d20roll clip, plays once) -> dice-ready
+// (static background.png, awaiting taps) -> reveal1 -> reveal2 -> reveal3
+// -> back to background. Each reveal stage only ever advances on an
+// explicit tap (server-authoritative — see roll_advance below); nothing
+// auto-chains except rolling -> dice-ready.
+type VideoPhase =
+  | "background"
+  | "rolling"
+  | "dice-ready"
+  | "reveal1"
+  | "reveal2"
+  | "reveal3";
 
 interface JoinPrompt {
   rollId: string;
@@ -30,6 +49,8 @@ const discordSdk = new DiscordSDK(
   import.meta.env.VITE_DISCORD_CLIENT_ID as string,
 );
 
+const REVEAL_HOLD_MS = 3500;
+
 function ActivityApp() {
   const { state, dispatch } = useStore();
   const [instanceId, setInstanceId] = useState<string | null>(null);
@@ -37,28 +58,45 @@ function ActivityApp() {
     "loading",
   );
   const [videoPhase, setVideoPhase] = useState<VideoPhase>("background");
+  const [revealVariant, setRevealVariant] = useState<RevealVariant | null>(
+    null,
+  );
   const [clickCount, setClickCount] = useState(0);
+  // Set once a reveal1/reveal2 clip has played through on its own (before
+  // the next tap arrives) — the static background.png shows in its place
+  // while waiting, rather than leaving the clip frozen on its last frame.
+  const [stageVideoEnded, setStageVideoEnded] = useState(false);
+  // Reveal3's own ending: its last frame dissolves into background.png via
+  // a rasterize/pixelate effect instead of a plain cut.
+  const [transitioning, setTransitioning] = useState(false);
+  const [bgFadeIn, setBgFadeIn] = useState(0);
   const [joinPrompt, setJoinPrompt] = useState<JoinPrompt | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  // Tracks which rollId the current user is watching (as roller or watcher)
+  const sequenceAudioRef = useRef<HTMLAudioElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Tracks which rollId the current user is watching (as roller or
+  // watcher). Kept as a ref (for the socket-handler closures registered
+  // once in the setup effect below, which need the always-current value
+  // regardless of their own stale closure) mirrored into state (for
+  // render — reading a ref during render isn't allowed).
   const watchingRollId = useRef<string | null>(null);
+  const [watchedRollIdState, setWatchedRollIdState] = useState<string | null>(
+    null,
+  );
+  const setWatching = useCallback((id: string | null) => {
+    watchingRollId.current = id;
+    setWatchedRollIdState(id);
+  }, []);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rasterizeStartedRef = useRef(false);
   const woodHitRef = useRef<HTMLAudioElement | null>(null);
-  const diceRollRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     const hit = new Audio("/audio/wood-hit.mp3");
     hit.load();
     woodHitRef.current = hit;
-
-    const roll = new Audio("/audio/dice-roll.mp3");
-    roll.load();
-    diceRollRef.current = roll;
   }, []);
-
-  // useAnimate for page-shake effect
-  const [appScope, animateApp] = useAnimate();
 
   // Background parallax
   const bgRawX = useMotionValue(0);
@@ -80,37 +118,225 @@ function ActivityApp() {
   const myPendingRoll = currentUserId
     ? Object.values(state.pendingRolls).find((p) => p.userId === currentUserId)
     : null;
+  // Render-time-safe: derived from state, not the watchingRollId ref.
+  const isRollerOfWatched =
+    !!myPendingRoll && myPendingRoll.rollId === watchedRollIdState;
 
-  // Drive the video element whenever the phase changes
+  // Starts a stage's video+audio together from `startTime` (default 0).
+  // Always hard-cuts whatever was previously playing — a tap (or an
+  // incoming roll_advance) never waits for the current clip to finish.
+  const playSequenceStage = useCallback(
+    (videoSrc: string, audioSrc: string, startTime = 0) => {
+      setStageVideoEnded(false);
+      const video = videoRef.current;
+      const audio = sequenceAudioRef.current;
+
+      const applyAndPlay = (el: HTMLMediaElement) => {
+        if (startTime > 0) {
+          const seek = () => {
+            el.currentTime = startTime;
+            void el.play().catch(() => {});
+          };
+          if (el.readyState >= 1) seek();
+          else el.addEventListener("loadedmetadata", seek, { once: true });
+        } else {
+          void el.play().catch(() => {});
+        }
+      };
+
+      if (video) {
+        video.pause();
+        video.src = videoSrc;
+        video.load();
+        applyAndPlay(video);
+      }
+      if (audio) {
+        audio.pause();
+        audio.src = audioSrc;
+        audio.load();
+        applyAndPlay(audio);
+      }
+    },
+    [],
+  );
+
+  const enterRolling = useCallback(() => {
+    // Defensive reset in case a new roll starts while the previous one's
+    // rasterize transition (see startRasterizeTransition) was still
+    // mid-flight.
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+    rasterizeStartedRef.current = true;
+    setTransitioning(false);
+    setBgFadeIn(0);
+    setVideoPhase("rolling");
+    setRevealVariant(null);
+    playSequenceStage(ROLLING_VIDEO, ROLLING_AUDIO);
+  }, [playSequenceStage]);
+
+  const enterReveal1 = useCallback(() => {
+    setVideoPhase("reveal1");
+    setRevealVariant(null);
+    playSequenceStage(REVEAL1_VIDEO, REVEAL1_AUDIO);
+  }, [playSequenceStage]);
+
+  const enterReveal2 = useCallback(
+    (variant: "normal" | "gold" | "red") => {
+      setVideoPhase("reveal2");
+      setRevealVariant(variant);
+      playSequenceStage(REVEAL2_VIDEO[variant], REVEAL2_AUDIO[variant]);
+    },
+    [playSequenceStage],
+  );
+
+  // Reveal3's last frame dissolves into background.png via a
+  // rasterize/pixelate effect rather than a plain cut — captures the
+  // frozen last frame once, then repeatedly redraws it at a shrinking
+  // resolution (blown back up with smoothing off, so it reads as
+  // pixelation) while crossfading in the plain background image.
+  const startRasterizeTransition = useCallback(() => {
+    if (rasterizeStartedRef.current) return;
+    rasterizeStartedRef.current = true;
+    if (revealTimerRef.current) {
+      clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+
+    const finish = () => {
+      setTransitioning(false);
+      setBgFadeIn(0);
+      setVideoPhase("background");
+      setRevealVariant(null);
+      setWatching(null);
+      setClickCount(0);
+    };
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.videoWidth === 0) {
+      finish();
+      return;
+    }
+
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      finish();
+      return;
+    }
+
+    // One-time snapshot of the frozen last frame — everything after this
+    // redraws from here, not from the (paused) video element.
+    const snapshot = document.createElement("canvas");
+    snapshot.width = w;
+    snapshot.height = h;
+    const snapCtx = snapshot.getContext("2d");
+    if (!snapCtx) {
+      finish();
+      return;
+    }
+    snapCtx.drawImage(video, 0, 0, w, h);
+
+    setTransitioning(true);
+    setBgFadeIn(0);
+
+    const DURATION_MS = 650;
+    const MAX_BLOCK = 48;
+    const start = performance.now();
+
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / DURATION_MS);
+      const blockSize = 1 + t * (MAX_BLOCK - 1);
+      const smallW = Math.max(1, Math.floor(w / blockSize));
+      const smallH = Math.max(1, Math.floor(h / blockSize));
+
+      const tmp = document.createElement("canvas");
+      tmp.width = smallW;
+      tmp.height = smallH;
+      const tmpCtx = tmp.getContext("2d");
+      if (tmpCtx) {
+        tmpCtx.imageSmoothingEnabled = true;
+        tmpCtx.drawImage(snapshot, 0, 0, smallW, smallH);
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(tmp, 0, 0, smallW, smallH, 0, 0, w, h);
+      }
+      setBgFadeIn(t);
+
+      if (t < 1) requestAnimationFrame(step);
+      else finish();
+    };
+    requestAnimationFrame(step);
+  }, [setWatching]);
+
+  const enterReveal3 = useCallback(
+    (variant: RevealVariant, frame40: boolean) => {
+      rasterizeStartedRef.current = false;
+      setVideoPhase("reveal3");
+      setRevealVariant(variant);
+      playSequenceStage(
+        REVEAL3_VIDEO[variant],
+        REVEAL3_AUDIO[variant],
+        frame40 ? REVEAL3_SKIP_TIME : 0,
+      );
+
+      // Safety net in case 'ended' never fires (e.g. autoplay blocked and
+      // the clip never actually started).
+      if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = setTimeout(
+        () => startRasterizeTransition(),
+        REVEAL_HOLD_MS,
+      );
+    },
+    [playSequenceStage, startRasterizeTransition],
+  );
+
+  // The rolling clip is the only stage that auto-advances on its own
+  // (-> the static "awaiting taps" background). reveal1/reveal2 settle on
+  // the same static background if their clip finishes before the next tap
+  // arrives, but stay on their own phase (still awaiting a tap). reveal3
+  // dissolves into the background via the rasterize transition above.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    const isLoop = videoPhase === "background";
-    const src =
-      videoPhase === "background"
-        ? "/background-video.mp4"
-        : videoPhase === "dice-ready"
-          ? "/dice-ready.mp4"
-          : videoPhase === "reveal"
-            ? "/dice-reveal.mp4"
-            : "/dice-reveal-critical.mp4";
+    if (videoPhase === "rolling") {
+      const onEnded = () => setVideoPhase("dice-ready");
+      video.addEventListener("ended", onEnded);
+      return () => video.removeEventListener("ended", onEnded);
+    }
+    if (videoPhase === "reveal1" || videoPhase === "reveal2") {
+      const onEnded = () => setStageVideoEnded(true);
+      video.addEventListener("ended", onEnded);
+      return () => video.removeEventListener("ended", onEnded);
+    }
+    if (videoPhase === "reveal3") {
+      const onEnded = () => startRasterizeTransition();
+      video.addEventListener("ended", onEnded);
+      return () => video.removeEventListener("ended", onEnded);
+    }
+  }, [videoPhase, startRasterizeTransition]);
 
-    video.src = src;
-    video.loop = isLoop;
-    video.load();
-    video.play().catch(() => {});
-
-    const freeze = () => {
-      if (!isLoop) video.pause();
-    };
-    video.addEventListener("ended", freeze);
-    return () => video.removeEventListener("ended", freeze);
-  }, [videoPhase]);
-
-  // 3-tap reveal mechanic with escalating page shake on each tap
+  // Tap-to-reveal: only the roller can tap, and only while a stage that
+  // accepts a tap is showing. The server decides what happens next (it
+  // knows the actual result; the roller doesn't, until the final tap) —
+  // this just reports the tap and, for a would-be 3rd tap, whether the
+  // current clip was still playing (decides the frame-40 skip).
   const handleVideoClick = useCallback(() => {
-    if (videoPhase !== "dice-ready" || !myPendingRoll || !instanceId) return;
+    if (!instanceId || !myPendingRoll || !isRollerOfWatched) return;
+    if (
+      videoPhase !== "dice-ready" &&
+      videoPhase !== "reveal1" &&
+      videoPhase !== "reveal2"
+    ) {
+      return;
+    }
+    if (clickCount >= 3) return;
 
     if (woodHitRef.current) {
       (woodHitRef.current.cloneNode() as HTMLAudioElement)
@@ -118,42 +344,31 @@ function ActivityApp() {
         .catch(() => {});
     }
 
-    setClickCount((prev) => {
-      const next = prev + 1;
-      // Shake intensity scales with tap number (6.5, 9, 11.5 px)
-      const amp = 4 + next * 2.5;
-      void animateApp(
-        appScope.current,
-        {
-          x: [-amp, amp, -(amp * 0.65), amp * 0.65, -(amp * 0.3), amp * 0.3, 0],
-        },
-        { duration: 0.38, ease: [0.36, 0.07, 0.19, 0.97] },
-      );
+    const wasInterrupted =
+      videoPhase !== "dice-ready" &&
+      !!videoRef.current &&
+      !videoRef.current.ended;
 
-      if (next >= 3) {
-        if (diceRollRef.current) {
-          (diceRollRef.current.cloneNode() as HTMLAudioElement)
-            .play()
-            .catch(() => {});
-        }
-        getSocket().emit("roll_reveal", {
-          instanceId,
-          rollId: myPendingRoll.rollId,
-        });
-        return 0;
-      }
-      return next;
+    setClickCount((c) => Math.min(c + 1, 3));
+    getSocket().emit("roll_tap", {
+      instanceId,
+      rollId: myPendingRoll.rollId,
+      wasInterrupted,
     });
-  }, [videoPhase, myPendingRoll, instanceId, appScope, animateApp]);
+  }, [instanceId, myPendingRoll, isRollerOfWatched, videoPhase, clickCount]);
 
-  // Watcher opts in to see a roll
+  // Watcher opts in to see a roll — always starts at the rolling clip,
+  // same as the roller, regardless of how far along the actual roll
+  // already is; the next roll_advance this client receives will jump it
+  // straight to wherever the host currently is.
   const handleJoin = useCallback(() => {
     if (!joinPrompt || !instanceId) return;
     getSocket().emit("roll_join", { instanceId, rollId: joinPrompt.rollId });
-    watchingRollId.current = joinPrompt.rollId;
-    setVideoPhase("dice-ready");
+    setWatching(joinPrompt.rollId);
+    setClickCount(0);
+    enterRolling();
     setJoinPrompt(null);
-  }, [joinPrompt, instanceId]);
+  }, [joinPrompt, instanceId, enterRolling, setWatching]);
 
   const handleDismiss = useCallback(() => setJoinPrompt(null), []);
 
@@ -238,9 +453,9 @@ function ActivityApp() {
           }
           if (payload.userId === auth.user.id) {
             // Current user is the roller — immediately watch
-            watchingRollId.current = payload.rollId;
-            setVideoPhase("dice-ready");
+            setWatching(payload.rollId);
             setClickCount(0);
+            enterRolling();
           } else {
             // Someone else rolled — offer to join
             setJoinPrompt({
@@ -251,23 +466,28 @@ function ActivityApp() {
           }
         });
 
-        // Only switch to reveal video if this user was watching the roll
+        // Every tap (from the roller, whoever that is) broadcasts here —
+        // hard-cut to whatever stage the host just advanced to, whether
+        // this client is the roller or a watcher who joined mid-roll.
+        socket.on("roll_advance", (payload) => {
+          if (watchingRollId.current !== payload.rollId) return;
+          if (payload.stage === 1) {
+            enterReveal1();
+          } else if (payload.stage === 2 && payload.variant) {
+            enterReveal2(payload.variant as "normal" | "gold" | "red");
+          } else if (payload.stage === 3 && payload.variant) {
+            enterReveal3(payload.variant, !!payload.frame40);
+          }
+        });
+
+        // Updates roll history / toast — the video itself is already
+        // driven by roll_advance's stage-3 event, which always arrives
+        // first for the same tap.
         socket.on("roll_revealed", (payload) => {
           dispatch({ type: "ROLL_REVEALED", payload });
           if (watchingRollId.current === payload.entry.id) {
-            const entry: RollEntry = payload.entry;
-            const isD20 = entry.dice.endsWith("d20");
-            const isCritical =
-              isD20 && entry.results.some((r) => r === 1 || r === 20);
-            setVideoPhase(isCritical ? "reveal-critical" : "reveal");
-
-            if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
-            revealTimerRef.current = setTimeout(
-              () => setVideoPhase("background"),
-              5000,
-            );
+            setWatching(null);
           }
-          watchingRollId.current = null;
           setJoinPrompt(null);
           setClickCount(0);
         });
@@ -277,7 +497,8 @@ function ActivityApp() {
           if (watchingRollId.current === payload.rollId) {
             if (revealTimerRef.current) clearTimeout(revealTimerRef.current);
             setVideoPhase("background");
-            watchingRollId.current = null;
+            setRevealVariant(null);
+            setWatching(null);
           }
           setJoinPrompt((prev) =>
             prev?.rollId === payload.rollId ? null : prev,
@@ -314,6 +535,10 @@ function ActivityApp() {
           // not in a voice channel context — safe to ignore
         }
 
+        // Warm the browser's cache for every roll animation clip now, so
+        // the first roll of the session doesn't stutter on a cold fetch.
+        preloadRollAssets();
+
         setAppStatus("ready");
       } catch (e) {
         if (cancelled) return;
@@ -326,7 +551,14 @@ function ActivityApp() {
     return () => {
       cancelled = true;
     };
-  }, [dispatch]);
+  }, [
+    dispatch,
+    enterRolling,
+    enterReveal1,
+    enterReveal2,
+    enterReveal3,
+    setWatching,
+  ]);
 
   if (appStatus === "loading") {
     return (
@@ -350,16 +582,39 @@ function ActivityApp() {
     );
   }
 
-  const isClickable = videoPhase === "dice-ready" && !!myPendingRoll;
+  const isClickable =
+    isRollerOfWatched &&
+    clickCount < 3 &&
+    (videoPhase === "dice-ready" ||
+      videoPhase === "reveal1" ||
+      videoPhase === "reveal2");
 
   return (
-    <div className="app-root" ref={appScope} onMouseMove={handleMouseMove}>
+    <div className="app-root" onMouseMove={handleMouseMove}>
       {/* Full-screen video background */}
       <div
-        className={`video-stage${isClickable ? " video-stage--clickable" : ""}`}
+        className={`video-stage${isClickable ? " video-stage--clickable" : ""}${revealVariant ? ` video-stage--${revealVariant}` : ""}`}
         onClick={handleVideoClick}
       >
-        {videoPhase === "background" ? (
+        {/* Always mounted (even during "background", fully transparent)
+            so videoRef/sequenceAudioRef are never null the instant a roll
+            starts — playSequenceStage runs imperatively, synchronously
+            with the phase-change call, not from an effect that would wait
+            for a fresh mount. */}
+        <video
+          ref={videoRef}
+          className="video-stage__video"
+          autoPlay
+          playsInline
+          style={
+            videoPhase === "background" || transitioning
+              ? { opacity: 0 }
+              : undefined
+          }
+        />
+        <audio ref={sequenceAudioRef} />
+
+        {videoPhase === "background" && (
           <motion.div
             className="bg-ambient"
             animate={{ x: [0, 8, -5, 4, 0], y: [0, -6, 8, -4, 0] }}
@@ -372,22 +627,40 @@ function ActivityApp() {
           >
             <motion.div className="bg-parallax" style={{ x: bgX, y: bgY }}>
               <img
-                src="/img/temp_background.jpg"
+                src={BACKGROUND_IMAGE}
                 className="bg-image"
                 alt=""
                 draggable={false}
               />
             </motion.div>
           </motion.div>
-        ) : (
-          <video
-            ref={videoRef}
-            className="video-stage__video"
-            autoPlay
-            loop
-            muted
-            playsInline
-          />
+        )}
+        {(videoPhase === "dice-ready" ||
+          ((videoPhase === "reveal1" || videoPhase === "reveal2") &&
+            stageVideoEnded)) &&
+          !transitioning && (
+            <img
+              src={BACKGROUND_IMAGE}
+              className="bg-image roll-static-overlay"
+              alt=""
+              draggable={false}
+            />
+          )}
+        {transitioning && (
+          <>
+            <img
+              src={BACKGROUND_IMAGE}
+              className="bg-image roll-static-overlay"
+              alt=""
+              draggable={false}
+              style={{ opacity: bgFadeIn }}
+            />
+            <canvas
+              ref={canvasRef}
+              className="video-stage__video roll-static-overlay"
+              style={{ opacity: 1 - bgFadeIn }}
+            />
+          </>
         )}
 
         {/* Tap-to-reveal overlay — shown only to the roller */}

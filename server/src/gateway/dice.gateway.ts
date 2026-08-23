@@ -152,8 +152,17 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const { results, total } = rollDice(parsed.count, parsed.sides);
     const rollId = randomUUID();
 
+    // "Faking" a reveal only makes sense for a clean natural 20 (no
+    // natural 1 among the other dice muddying whether it's actually
+    // good) — decided once, here, so every client (roller included, who
+    // doesn't know their own result yet either) sees the same tease.
+    const isD20 = payload.dice.endsWith('d20');
+    const hasNat1 = isD20 && results.includes(1);
+    const hasNat20 = isD20 && results.includes(20);
+    const isFaked = hasNat20 && !hasNat1 && Math.random() < 0.5;
+
     this.logger.log(
-      `roll_start: ${user.username} rolls ${payload.dice}${payload.isHidden ? ' [hidden]' : ''} → [${results.join(', ')}] = ${total} (rollId: ${rollId})`,
+      `roll_start: ${user.username} rolls ${payload.dice}${payload.isHidden ? ' [hidden]' : ''} → [${results.join(', ')}] = ${total}${isFaked ? ' (faked reveal)' : ''} (rollId: ${rollId})`,
     );
 
     session.pendingRolls.set(rollId, {
@@ -166,6 +175,8 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
       isHidden: payload.isHidden,
       timestamp: new Date().toISOString(),
       watcherIds: new Set([user.userId]),
+      tapCount: 0,
+      isFaked,
     });
 
     const rollStartedPayload = {
@@ -215,9 +226,10 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  @SubscribeMessage('roll_reveal')
-  handleRollReveal(
-    @MessageBody() payload: { instanceId: string; rollId: string },
+  @SubscribeMessage('roll_tap')
+  handleRollTap(
+    @MessageBody()
+    payload: { instanceId: string; rollId: string; wasInterrupted: boolean },
     @ConnectedSocket() socket: TypedSocket,
   ) {
     const session = this.sessionStore.get(payload.instanceId);
@@ -230,6 +242,50 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
       (u) => u.socketId === socket.id,
     );
     if (!user || user.userId !== pending.userId) return;
+
+    // Already at 3 (or a stray extra tap raced in) — nothing further to
+    // advance to.
+    if (pending.tapCount >= 3) return;
+    pending.tapCount += 1;
+    const stage = pending.tapCount as 1 | 2 | 3;
+
+    const isD20 = pending.dice.endsWith('d20');
+    const hasNat1 = isD20 && pending.results.includes(1);
+    const hasNat20 = isD20 && pending.results.includes(20);
+
+    let variant: 'normal' | 'gold' | 'red' | 'red-fake' | undefined;
+    if (stage === 2) {
+      variant = hasNat1 ? 'red' : hasNat20 ? (pending.isFaked ? 'red' : 'gold') : 'normal';
+    } else if (stage === 3) {
+      variant = hasNat1
+        ? 'red'
+        : hasNat20
+          ? pending.isFaked
+            ? 'red-fake'
+            : 'gold'
+          : 'normal';
+    }
+
+    const frame40 = stage === 3 ? payload.wasInterrupted : undefined;
+
+    this.logger.log(
+      `roll_tap: ${user.username} tap ${stage}/3 on ${pending.dice}` +
+        (variant ? ` (variant=${variant})` : '') +
+        (frame40 ? ' [frame40]' : ''),
+    );
+
+    const advancePayload = { rollId: payload.rollId, stage, variant, frame40 };
+    if (pending.isHidden) {
+      // A hidden roll never broadcasts roll_started to the room, so no one
+      // else has watchingRollId set for it — but sending this to everyone
+      // regardless would still leak the roll's existence and outcome tease
+      // to anyone inspecting their own socket traffic.
+      socket.emit('roll_advance', advancePayload);
+    } else {
+      this.server.to(payload.instanceId).emit('roll_advance', advancePayload);
+    }
+
+    if (stage < 3) return;
 
     session.pendingRolls.delete(payload.rollId);
 
@@ -247,7 +303,7 @@ export class DiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const watcherIds = Array.from(pending.watcherIds);
 
     this.logger.log(
-      `roll_reveal: ${user.username} reveals ${pending.dice} → ${pending.total}` +
+      `roll_tap: ${user.username} reveals ${pending.dice} → ${pending.total}` +
         (pending.isHidden
           ? ' [hidden, not stored]'
           : ` (broadcasting to ${watcherIds.length} watcher(s))`),

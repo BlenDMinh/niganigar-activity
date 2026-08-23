@@ -26,6 +26,13 @@ export interface PendingRoll {
   isHidden: boolean;
   timestamp: string;
   watcherIds: Set<string>;
+  // How many of the 3 reveal taps have landed so far.
+  tapCount: number;
+  // Decided once at roll_start, only relevant when the roll is a clean
+  // natural 20 (no natural 1 among the other dice) — 50% chance the
+  // reveal teases a bad roll (red) before flipping to the real gold
+  // result on the final tap.
+  isFaked: boolean;
 }
 
 export interface ParsedDice {
@@ -44,7 +51,11 @@ export interface ClientToServerEvents {
     dice: string;
     isHidden: boolean;
   }) => void;
-  roll_reveal: (payload: { instanceId: string; rollId: string }) => void;
+  roll_tap: (payload: {
+    instanceId: string;
+    rollId: string;
+    wasInterrupted: boolean;
+  }) => void;
   roll_join: (payload: { instanceId: string; rollId: string }) => void;
   music_change: (payload: {
     instanceId: string;
@@ -80,6 +91,12 @@ export interface ServerToClientEvents {
     username: string;
   }) => void;
   roll_revealed: (payload: { entry: RollEntry; watcherIds: string[] }) => void;
+  roll_advance: (payload: {
+    rollId: string;
+    stage: 1 | 2 | 3;
+    variant?: 'normal' | 'gold' | 'red' | 'red-fake';
+    frame40?: boolean;
+  }) => void;
   roll_cancelled: (payload: { rollId: string; userId: string }) => void;
   error: (payload: { message: string }) => void;
   session_music: (payload: {
